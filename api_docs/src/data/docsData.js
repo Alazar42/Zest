@@ -54,6 +54,8 @@ export const DOCS_SECTIONS = [
       { id: 'background-tasks', title: 'FastAPI Background Tasks' },
       { id: 'multipart-uploads', title: 'Multipart Form Data & Uploads' },
       { id: 'openapi-swagger', title: 'Swagger UI & OpenAPI 3.0' },
+      { id: 'uuid-generator', title: 'UUID v4 Engine (zuuid)' },
+      { id: 'time-datetime', title: 'Time & DateTime (zest.time)' },
       { id: 'zenv-loader', title: 'Environment Loader (zenv)' },
       { id: 'jwt-security', title: 'JWT Authentication & Cookies' },
       { id: 'auth-middleware', title: 'Route Guards & Role-Based Auth' }
@@ -504,6 +506,7 @@ pub fn register(g: *zest.Group) !void {
         code: `const std = @import("std");
 const zest = @import("zest");
 const database = @import("database.zig");
+const Product = @import("models/product.zig").Product;
 const products_routes = @import("routes/products.zig");
 
 fn welcome(res: *zest.Response) !void {
@@ -532,6 +535,7 @@ pub fn main() !void {
     try app.use(zest.middleware.logger);
     try app.use(zest.middleware.cors(.{}));
     app.enableDocs(); // Serves Swagger UI at /docs and spec at /openapi.json
+    try app.registerModel(Product);
 
     // 5. Mount Root Route & Sub-Router Group
     try app.get("/", welcome);
@@ -994,21 +998,39 @@ defer db.deinit();`
   },
 
   'sqlite-driver': {
-    title: 'Real SQLite Persistence',
-    subtitle: 'Physical disk storage with automated schema creation.',
+    title: 'Real SQLite Persistence & WAL Mode',
+    subtitle: 'Production-ready SQLite3 engine with Write-Ahead Logging (WAL) and automatic DDL schema synchronization.',
     content: `
-Unlike mock or memory-only databases, Zest creates real physical SQLite 3 database files verified with standard \`SQLite format 3\` headers. When saving models, table DDL is automatically generated and synchronized on first insert.
+Unlike mock or in-memory databases, Zest creates real physical SQLite 3 database files verified with standard \`SQLite format 3\` headers.
+
+### Production SQLite Features in Zest
+- **SQLite3 Open v2 Flags**: Opened using \`SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE\` to ensure robust multi-threaded file creation and access.
+- **Automatic WAL Mode**: Automatically activates Write-Ahead Logging (\`PRAGMA journal_mode=WAL;\`) upon connection. Readers never block writers, and writers never block readers, offering high concurrent throughput.
+- **Automated DDL Schema Sync**: On model save or query, table schemas are created automatically with strongly-typed columns and indexes.
+- **Zero-Config File Management**: Supply any relative or absolute file path via \`sqlite:storage/app.db\` or \`DATABASE_URL=sqlite:products.db\`.
     `,
     codeExamples: [
       {
-        title: 'SQLite Connection',
+        title: 'Connecting to SQLite with WAL Mode',
         language: 'zig',
-        code: `var db = try zest.Db.connect(allocator, "sqlite:storage/app.db");
-defer db.deinit();
+        code: `const std = @import("std");
+const zest = @import("zest");
 
-// Direct CRUD operations
-try db.insert("users", "usr_101", "{\\"name\\":\\"Alice\\",\\"role\\":\\"admin\\"}");
-const user_json = try db.findByIdAlloc("users", "usr_101", allocator);`
+pub fn main() !void {
+    const allocator = std.heap.page_allocator;
+
+    // Connects with sqlite3_open_v2 and enables PRAGMA journal_mode=WAL;
+    var db = try zest.Db.connect(allocator, "sqlite:products.db");
+    defer db.deinit();
+
+    // Direct CRUD operations
+    try db.insert("products", "prod_1", "{\\"name\\":\\"MacBook Pro\\",\\"price\\":1999.99}");
+    const product_json = try db.findByIdAlloc("products", "prod_1", allocator);
+    if (product_json) |json| {
+        defer allocator.free(json);
+        std.log.info("Loaded product: {s}", .{json});
+    }
+}`
       }
     ]
   },
@@ -1060,30 +1082,72 @@ defer pool.release(conn);
 
   'model-mixin': {
     title: 'Model Mixin & DDL Sync',
-    subtitle: 'Compile-time ORM metadata generation and schema management.',
+    subtitle: 'Compile-time ORM metadata generation, UUID auto-generation, schema sync, and full CRUD operations.',
     content: `
-Any Zig struct can become a full-featured database Model by declaring \`pub const model = zest.Model(@This());\`.
+Any Zig struct becomes a full-featured database Model across SQLite, PostgreSQL, and MongoDB by declaring:
+\`\`\`zig
+pub const model = zest.Model(@This());
+\`\`\`
+
+### Primary Keys & Auto-Generation
+- **UUID Primary Keys**: Declare \`id: ?[]const u8 = null\` (or \`[]const u8\`). When \`Model.save(&db, allocator, &instance)\` is invoked, Zest automatically generates an RFC 4122 UUID v4 if \`id\` is \`null\` or empty.
+- **Integer IDs**: Declare \`id: u32\` or \`id: ?u32\` for traditional integer primary keys.
+- **Auto-Syncing Table DDL**: \`Model.sync(&db)\` or initial \`Model.save()\` automatically generates and executes \`CREATE TABLE IF NOT EXISTS\` with mapped column types (\`INTEGER\`, \`REAL\`, \`BOOLEAN\`, \`TEXT\`).
 
 ### Injected Model Capabilities
-- \`Model.save(&db, allocator, &instance)\`: Persists instance to database.
-- \`Model.find(&db, allocator, id)\`: Finds single record by primary key.
-- \`Model.findAll(&db, allocator)\`: Loads all records.
-- \`Model.delete(&db, id)\`: Deletes record by primary key.
-- \`Model.query(&db, allocator)\`: Instantiates fluent \`QueryBuilder\`.
-- \`Model.sync(&db)\`: Automatically creates database table with typed columns.
+- \`Model.save(&db, allocator, &instance)\`: Persists (insert or update) an instance to the database. Auto-populates UUID if missing.
+- \`Model.find(&db, allocator, id)\`: Finds a single record by primary key (UUID string or integer ID). Returns \`!?std.json.Parsed(Self)\`.
+- \`Model.findAll(&db, allocator)\`: Loads all raw JSON records for this table/collection.
+- \`Model.delete(&db, id)\`: Deletes record by primary key. Returns \`bool\`.
+- \`Model.count(&db)\`: Returns the total record count.
+- \`Model.query(&db, allocator)\`: Instantiates a fluent \`QueryBuilder(Self)\` for chaining \`where\`, \`orderBy\`, \`limit\`, and \`offset\`.
+- \`Model.toJson(&instance, allocator)\`: Serializes model instance to JSON.
+- \`Model.fromJson(allocator, json_str)\`: Deserializes JSON string to \`std.json.Parsed(Self)\`.
+- \`Model.hasMany(instance, TargetModel, foreign_key, &db, allocator)\`: Resolves one-to-many related records.
     `,
     codeExamples: [
       {
-        title: 'Declaring a Model',
+        title: 'Model with UUID Primary Key & Validation',
         language: 'zig',
-        code: `const User = struct {
-    id: u32,
-    username: []const u8,
-    email: []const u8,
-    is_active: bool = true,
+        code: `const zest = @import("zest");
 
+pub const Product = struct {
+    id: ?[]const u8 = null, // Auto-generated UUIDv4 if null on save
+    name: []const u8,
+    price: f64,
+
+    // Universal Comptime ORM Mixin
     pub const model = zest.Model(@This());
+
+    // Automated FastAPI-grade Schema Validation
+    pub fn validate(self: *const @This(), errs: *zest.ValidationErrors) void {
+        zest.validator.requireMinLength(errs, "name", self.name, 3);
+        zest.validator.requireMin(errs, "price", self.price, 0.01);
+    }
 };`
+      },
+      {
+        title: 'Saving and Querying Models',
+        language: 'zig',
+        code: `// 1. Save with automatic UUID generation
+var product = Product{ .name = "Wireless Keyboard", .price = 89.99 };
+try Product.model.save(&db, allocator, &product);
+
+// 2. Find by UUID string
+var found = try Product.model.find(&db, allocator, "c9bf9e57-1685-4c89-bafb-ff5af830be8a");
+if (found) |*p| {
+    defer p.deinit();
+    std.log.info("Product: {s} - \${d:.2}", .{p.value.name, p.value.price});
+}
+
+// 3. Query with QueryBuilder
+var q = Product.model.query(&db, allocator);
+_ = q.where("price", .gte, 50.0);
+const results = try q.exec();
+defer {
+    for (results) |*r| r.deinit();
+    allocator.free(results);
+}`
       }
     ]
   },
@@ -1248,34 +1312,45 @@ fn uploadAvatar(req: *zest.Request, res: *zest.Response) !void {
 
   'openapi-swagger': {
     title: 'Swagger UI & OpenAPI 3.0',
-    subtitle: 'Zero-configuration interactive Swagger UI documentation and OpenAPI 3.0 specification.',
+    subtitle: 'Zero-configuration interactive Swagger UI documentation and compile-time OpenAPI 3.0 schema generation.',
     content: `
 Zest delivers automated, zero-overhead API documentation out of the box. Simply calling \`app.enableDocs()\` activates:
 
-- **Interactive Swagger UI** served at \`/docs\` with one-click **"Try it out"** live testing.
-- **OpenAPI 3.0.0 JSON Specification** served at \`/openapi.json\` compliant with OpenAPI, Postman, and client generators.
+- **Interactive Swagger UI** served at \`/docs\` with one-click **"Try it out"** live testing and request duration timing.
+- **OpenAPI 3.0.0 JSON Specification** served at \`/openapi.json\` compliant with OpenAPI, Postman, and client SDK generators.
 - **Automatic Route Deduplication**: Automatically normalizes trailing slashes (e.g. \`/products/\` and \`/products\`) so routes never appear as duplicates.
-- **Model Schemas**: Automatically maps your domain resource schemas under OpenAPI \`components.schemas\`.
+- **Model Reflection via \`app.registerModel(T)\`**: Comptime struct inspection that automatically derives OpenAPI types, required fields, and nullable attributes.
 
 ---
 
 ### Key Features
 
-1. **Auto-Discovered Resource Tags**:
-   Zest inspects routes, strips technical prefixes (\`/api/v1\`), and groups endpoints cleanly by domain resource (e.g. \`Products\`, \`Users\`).
+1. **Model Registration (\`app.registerModel(T)\`)**:
+   Pass your Model struct directly to \`app.registerModel(Product)\`. Zest inspects the struct at compile time and creates accurate schemas under \`components.schemas\`:
+   - Integers (\`u32\`, \`i64\`) -> \`{"type": "integer"}\`
+   - Floats (\`f64\`, \`f32\`) -> \`{"type": "number"}\`
+   - Booleans (\`bool\`) -> \`{"type": "boolean"}\`
+   - Strings (\`[]const u8\`) -> \`{"type": "string"}\`
+   - Optionals (\`?T\`) -> \`{"nullable": true}\` and excluded from \`"required"\` array.
+   - Non-optionals -> Added to \`"required": ["name", "price"]\`.
 
-2. **Clean Schemas & Models**:
-   Endpoints are linked to resource schemas under \`components.schemas\`, showing input and output formats.
+2. **Collection vs Entity Responses**:
+   - Collection endpoints (e.g. \`GET /api/v1/products\`) automatically render response schemas as typed arrays:
+     \`\`\`json
+     { "type": "array", "items": { "$ref": "#/components/schemas/Product" } }
+     \`\`\`
+   - Single item endpoints (e.g. \`GET /api/v1/products/:id\`) reference the single schema \`{"$ref": "#/components/schemas/Product"}\`.
 
-3. **Path Parameter Detection**:
-   Dynamic parameters like \`:id\` are automatically recognized as path parameters with interactive input fields in Swagger UI.
+3. **Intelligent Path Parameters**:
+   Parameters like \`:id\` are automatically recognized with interactive input fields in Swagger UI, typed according to the model's primary key (integer or string/UUID).
     `,
     codeExamples: [
       {
-        title: 'Enabling Swagger UI Documentation',
+        title: 'Enabling Swagger UI & Registering Models',
         language: 'zig',
         code: `const std = @import("std");
 const zest = @import("zest");
+const Product = @import("models/product.zig").Product;
 
 pub fn main() !void {
     var app = zest.init("127.0.0.1", 8000);
@@ -1283,6 +1358,9 @@ pub fn main() !void {
 
     // Serves Swagger UI at /docs and spec at /openapi.json
     app.enableDocs();
+
+    // Register Model schema for Swagger UI with comptime type reflection
+    try app.registerModel(Product);
 
     // Register routes
     try app.get("/api/v1/products", listProducts);
@@ -1317,6 +1395,157 @@ npx @openapitools/openapi-generator-cli generate \\
   -i http://127.0.0.1:8000/openapi.json \\
   -g typescript-axios \\
   -o ./client-sdk`
+      }
+    ]
+  },
+
+  'uuid-generator': {
+    title: 'UUID v4 Engine (zuuid)',
+    subtitle: 'Zero-allocation RFC 4122 Version 4 UUID generation and validation.',
+    content: `
+Zest includes a high-performance UUID engine available under both \`zest.uuid\` and \`zest.zuuid\`.
+
+On Linux, UUIDs are generated with cryptographically secure random bytes via direct \`getrandom()\` syscalls with zero heap allocation. On other platforms, high-resolution nanosecond bit-mixing provides high-entropy random identifiers.
+
+### Available Functions
+- \`zuuid.generate() -> [36]u8\`: Generates a random RFC 4122 v4 UUID string returned as a stack value (36-byte array). Easily coerced to \`[]const u8\`.
+- \`zuuid.v4(buf: *[36]u8) -> []const u8\`: Formats a UUID v4 directly into your stack buffer. Zero allocations.
+- \`zuuid.new(allocator) -> ![]u8\`: Allocates and returns a fresh owned UUID string.
+- \`zuuid.generateAlloc(allocator) -> ![]u8\`: Alias for \`zuuid.new\`.
+- \`zuuid.isValid(str: []const u8) -> bool\`: Validates whether a given string is a valid 36-character hyphenated UUID.
+
+### Auto-UUID in Models
+When declaring a model with an optional string ID (\`id: ?[]const u8 = null\`), calling \`Model.save(&db, allocator, &instance)\` will **automatically generate** a fresh UUID v4 if the ID is \`null\` or empty.
+    `,
+    codeExamples: [
+      {
+        title: 'Generating and Validating UUIDs',
+        language: 'zig',
+        code: `const std = @import("std");
+const zest = @import("zest");
+
+pub fn main() !void {
+    const allocator = std.heap.page_allocator;
+
+    // 1. Stack value generation (36-byte array)
+    const id_arr = zest.zuuid.generate();
+    std.log.info("Generated UUID: {s}", .{id_arr});
+
+    // 2. Format into stack buffer (zero allocation)
+    var buf: [36]u8 = undefined;
+    const id_slice = zest.zuuid.v4(&buf);
+    std.log.info("Buffer UUID: {s}", .{id_slice});
+
+    // 3. Heap-allocated UUID string
+    const owned_id = try zest.zuuid.new(allocator);
+    defer allocator.free(owned_id);
+    std.log.info("Allocated UUID: {s}", .{owned_id});
+
+    // 4. Validate UUID format
+    const is_valid = zest.zuuid.isValid(id_slice);
+    std.log.info("Is valid UUID? {any}", .{is_valid}); // true
+}`
+      },
+      {
+        title: 'Using Auto-UUID in Models & Controllers',
+        language: 'zig',
+        code: `const Product = struct {
+    id: ?[]const u8 = null, // Auto-generated UUIDv4 on save if null
+    name: []const u8,
+    price: f64,
+
+    pub const model = zest.Model(@This());
+};
+
+fn createProduct(req: *zest.Request, res: *zest.Response) !void {
+    var parsed = (try req.validateJson(Product, res)) orelse return;
+    defer parsed.deinit();
+
+    var product = parsed.value;
+    // If not supplied in payload, zest.zuuid.new or auto-save generates it:
+    if (product.id == null or product.id.?.len == 0) {
+        product.id = try zest.zuuid.new(req.allocator);
+    }
+
+    try Product.model.save(&db, req.allocator, &product);
+    try res.status(.created, "{\\"status\\":\\"created\\"}");
+}`
+      }
+    ]
+  },
+
+  'time-datetime': {
+    title: 'Time & DateTime (zest.time)',
+    subtitle: 'High-precision timestamps, ISO-8601 formatting, HTTP-date generation, and calendar conversion.',
+    content: `
+Zest provides a dedicated \`zest.time\` module designed for web servers, caching headers, timestamps, and benchmarking.
+
+### Timestamps & Monotonic Clocks
+- \`time.now() -> i64\`: Returns current Unix epoch time in seconds.
+- \`time.milliTimestamp() -> i64\`: Returns current Unix epoch time in milliseconds.
+- \`time.nanoTimestamp() -> i128\`: Returns current Unix epoch time in nanoseconds.
+- \`time.getMonotonicNanos() -> i128\`: Monotonic clock for sub-microsecond latency measurement and middleware timing.
+
+### Calendar & DateTime Struct (\`time.DateTime\`)
+The \`DateTime\` struct provides calendar conversion from Unix seconds without external C dependencies:
+- \`DateTime.nowUtc()\`: Returns current UTC calendar struct (\`year\`, \`month\`, \`day\`, \`hour\`, \`minute\`, \`second\`, \`weekday\`).
+- \`DateTime.fromEpoch(secs)\`: Converts any Unix timestamp into a \`DateTime\`.
+- \`dt.toIso8601(buf)\`: Formats as standard ISO-8601 / RFC 3339 UTC (\`2026-10-01T20:44:26Z\`).
+- \`dt.toHttpDate(buf)\`: Formats as RFC 7231 / RFC 1123 HTTP date (\`Thu, 01 Oct 2026 20:44:26 GMT\`), perfect for \`Last-Modified\`, \`Date\`, and \`Expires\` headers.
+- \`dt.toDateString(buf)\`: Formats as \`YYYY-MM-DD\`.
+- \`dt.toTimeString(buf)\`: Formats as \`HH:MM:SS\`.
+
+### Direct String Helpers
+- \`time.iso8601(&buf) -> []const u8\`: Fast current ISO-8601 string.
+- \`time.httpDate(&buf) -> []const u8\`: Fast current HTTP-date string.
+- \`time.date(&buf) -> []const u8\`: Fast current \`YYYY-MM-DD\` string.
+- \`time.timeOfDay(&buf) -> []const u8\`: Fast current \`HH:MM:SS\` string.
+- \`time.parseIso8601(str) -> ?DateTime\`: Parses ISO-8601 strings into a \`DateTime\` struct.
+    `,
+    codeExamples: [
+      {
+        title: 'Working with Timestamps & ISO-8601',
+        language: 'zig',
+        code: `const std = @import("std");
+const zest = @import("zest");
+
+pub fn main() !void {
+    // 1. Current Unix timestamps
+    const sec = zest.time.now();
+    const ms = zest.time.milliTimestamp();
+    std.log.info("Unix seconds: {d}, ms: {d}", .{sec, ms});
+
+    // 2. High-precision latency timing
+    const t0 = zest.time.getMonotonicNanos();
+    // ... perform work ...
+    const elapsed_ns = zest.time.getMonotonicNanos() - t0;
+    std.log.info("Elapsed: {d} ns ({d:.2} ms)", .{elapsed_ns, @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0});
+
+    // 3. Current ISO-8601 string (e.g. "2026-10-01T20:44:26Z")
+    var iso_buf: [32]u8 = undefined;
+    const iso_str = zest.time.iso8601(&iso_buf);
+    std.log.info("ISO-8601: {s}", .{iso_str});
+
+    // 4. HTTP-date for response headers (e.g. "Thu, 01 Oct 2026 20:44:26 GMT")
+    var http_buf: [32]u8 = undefined;
+    const http_str = zest.time.httpDate(&http_buf);
+    std.log.info("HTTP Date: {s}", .{http_str});
+}`
+      },
+      {
+        title: 'Parsing Dates and Measuring Request Latency',
+        language: 'zig',
+        code: `// Parse incoming ISO-8601 string from request payload or query parameter
+if (zest.time.parseIso8601("2026-10-01T15:30:00Z")) |dt| {
+    std.log.info("Parsed Year: {d}, Month: {d}, Day: {d}", .{dt.year, dt.month, dt.day});
+}
+
+// In a custom timing middleware:
+fn timingMiddleware(req: *zest.Request, res: *zest.Response) !bool {
+    var date_buf: [32]u8 = undefined;
+    res.setHeader("Date", zest.time.httpDate(&date_buf));
+    return true;
+}`
       }
     ]
   },
