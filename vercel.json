@@ -1,0 +1,10 @@
+{
+  "buildCommand": "cd api_docs && npm install && npm run build",
+  "outputDirectory": "api_docs/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

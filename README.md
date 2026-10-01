@@ -60,42 +60,63 @@ zig fetch --save git+https://github.com/Alazar42/Zest.git
 
 This will automatically add Zest to your `build.zig.zon` dependencies.
 
-### 2. Configure `build.zig`
+### 2. Add Zest to Your Existing `build.zig`
 
-Update your project's `build.zig` to link the Zest module into your executable:
+You do **not** need to rewrite your `build.zig`. Simply add two lines to your existing build script:
+
+#### Line A: Fetch the dependency
+Inside your `pub fn build(b: *std.Build) void` function (usually right after defining `target` and `optimize`), add:
 
 ```zig
-const std = @import("std");
+const zest_dep = b.dependency("zest", .{
+    .target = target,
+    .optimize = optimize,
+});
+```
 
-pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+#### Line B: Import the module into your executable
+Find where your executable (`exe`) is declared, and add the `zest` import:
 
-    // 1. Fetch Zest package dependency
-    const zest_dep = b.dependency("zest", .{
-        .target = target,
-        .optimize = optimize,
-    });
+```zig
+// If you use standard b.addExecutable:
+exe.root_module.addImport("zest", zest_dep.module("zest"));
+```
 
-    // 2. Define application executable and import Zest
-    const exe = b.addExecutable(.{
-        .name = "my-app",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zest", .module = zest_dep.module("zest") },
-            },
-        }),
-    });
+*(Alternatively, if your project uses `b.createModule` with an `imports` array)*:
+```zig
+.imports = &.{
+    .{ .name = "zest", .module = zest_dep.module("zest") },
+},
+```
 
-    b.installArtifact(exe);
+---
 
-    const run_cmd = b.addRunArtifact(exe);
-    const run_step = b.step("run", "Run the application");
-    run_step.dependOn(&run_cmd.step);
-}
+#### Full Before & After Example for `build.zig` (Zig 0.16.0+)
+
+```diff
+ pub fn build(b: *std.Build) void {
+     const target = b.standardTargetOptions(.{});
+     const optimize = b.standardOptimizeOption(.{});
+ 
++    // 1. Add this line:
++    const zest_dep = b.dependency("zest", .{
++        .target = target,
++        .optimize = optimize,
++    });
+ 
+     const exe = b.addExecutable(.{
+         .name = "my-app",
+         .root_module = b.createModule(.{
+             .root_source_file = b.path("src/main.zig"),
+             .target = target,
+             .optimize = optimize,
+         }),
+     });
++    // 2. Add this line:
++    exe.root_module.addImport("zest", zest_dep.module("zest"));
+ 
+     b.installArtifact(exe);
+ }
 ```
 
 ---
