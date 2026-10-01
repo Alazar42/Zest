@@ -1247,44 +1247,32 @@ fn uploadAvatar(req: *zest.Request, res: *zest.Response) !void {
   },
 
   'openapi-swagger': {
-    title: 'Interactive Swagger UI & ReDoc Documentation',
-    subtitle: 'Zero-configuration OpenAPI 3.0 specification with interactive Swagger UI and 3-panel ReDoc.',
+    title: 'Swagger UI & OpenAPI 3.0',
+    subtitle: 'Zero-configuration interactive Swagger UI documentation and OpenAPI 3.0 specification.',
     content: `
-Zest delivers automated, FastAPI-grade API documentation out of the box with zero runtime overhead or external generators. Simply calling \`app.enableDocs()\` activates:
+Zest delivers automated, zero-overhead API documentation out of the box. Simply calling \`app.enableDocs()\` activates:
 
-- **Interactive Swagger UI** served at \`/docs\` with one-click **"Try it out"**, request duration timing, and live payload execution.
-- **Modern ReDoc Documentation** served at \`/redoc\` with responsive 3-panel layout for deep reading and client SDK references.
-- **OpenAPI 3.0.0 JSON Specification** served at \`/openapi.json\` compliant with OpenAPI, Postman, and code generation tools.
-- **Top-Level Bearer JWT Authorization**: Green **"Authorize"** button in Swagger UI to test protected routes with token persistence across refreshes.
+- **Interactive Swagger UI** served at \`/docs\` with one-click **"Try it out"** live testing.
+- **OpenAPI 3.0.0 JSON Specification** served at \`/openapi.json\` compliant with OpenAPI, Postman, and client generators.
+- **Automatic Route Deduplication**: Automatically normalizes trailing slashes (e.g. \`/products/\` and \`/products\`) so routes never appear as duplicates.
+- **Model Schemas**: Automatically maps your domain resource schemas under OpenAPI \`components.schemas\`.
 
 ---
 
-### What Makes Zest's Docs FastAPI-Grade?
+### Key Features
 
-1. **Auto-Discovered Domain Resources & Tags**:
-   Zest automatically inspects registered routes, strips common prefixes (\`/api/v1\`), and groups endpoints by domain resource (e.g. \`Products\`, \`Users\`, \`Auth\`).
+1. **Auto-Discovered Resource Tags**:
+   Zest inspects routes, strips technical prefixes (\`/api/v1\`), and groups endpoints cleanly by domain resource (e.g. \`Products\`, \`Users\`).
 
-2. **Full Data Models & Schemas**:
-   The documentation engine populates the OpenAPI \`components.schemas\` section with:
-   - \`{Resource}Response\`: Typed model attributes (\`id\`, \`name\`, \`description\`, \`price\`, \`is_active\`, \`created_at\`).
-   - \`{Resource}Create\`: Input payload schema for creation and updates.
-   - \`HTTPValidationError\` & \`ValidationError\`: FastAPI standard validation error model with \`loc\` (path/body/query), \`msg\`, and error \`type\`.
-   - \`ErrorResponse\`: Standardized error message and HTTP status code schema.
-   - \`SuccessMessage\`: Standard confirmation object for \`DELETE\` endpoints.
+2. **Clean Schemas & Models**:
+   Endpoints are linked to resource schemas under \`components.schemas\`, showing input and output formats.
 
-3. **Interactive Request Payloads & Examples**:
-   When testing \`POST\`, \`PUT\`, or \`PATCH\` endpoints, Swagger UI is pre-populated with realistic example JSON payloads so you can test endpoints with a single click.
-
-4. **Typed Path & Query Parameters**:
-   - Path parameters like \`:id\` are automatically typed as \`integer (int64)\`, while parameters like \`:slug\` or \`:username\` are typed as \`string\`.
-   - List endpoints automatically expose pagination query parameters (\`limit\`, \`offset\`) and search filter query parameters (\`search\`, \`sort_by\`, \`order\`).
-
-5. **JWT Bearer Token Security**:
-   Swagger UI includes the **Authorize** lock button configured with HTTP Bearer format (\`OAuth2PasswordBearer\`). Once authorized, your JWT token is automatically included as an \`Authorization: Bearer <token>\` header for all requests.
+3. **Path Parameter Detection**:
+   Dynamic parameters like \`:id\` are automatically recognized as path parameters with interactive input fields in Swagger UI.
     `,
     codeExamples: [
       {
-        title: 'Enabling Documentation',
+        title: 'Enabling Swagger UI Documentation',
         language: 'zig',
         code: `const std = @import("std");
 const zest = @import("zest");
@@ -1293,7 +1281,7 @@ pub fn main() !void {
     var app = zest.init("127.0.0.1", 8000);
     defer app.deinit();
 
-    // Registers /docs (Swagger UI), /redoc (ReDoc), and /openapi.json (Spec)
+    // Serves Swagger UI at /docs and spec at /openapi.json
     app.enableDocs();
 
     // Register routes
@@ -1303,7 +1291,6 @@ pub fn main() !void {
     try app.delete("/api/v1/products/:id", deleteProduct);
 
     std.log.info("Swagger UI available at: http://127.0.0.1:8000/docs", .{});
-    std.log.info("ReDoc available at:      http://127.0.0.1:8000/redoc", .{});
     try app.listen();
 }`
       },

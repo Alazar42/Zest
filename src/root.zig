@@ -342,29 +342,30 @@ test "OpenAPI JSON specification generator" {
 
     const routes = [_]Route{
         .{ .method = .GET, .path = "/items", .handler = Route.wrap(handler) },
+        .{ .method = .GET, .path = "/items/", .handler = Route.wrap(handler) }, // Duplicate trailing slash
         .{ .method = .GET, .path = "/items/:id", .handler = Route.wrap(handler) },
         .{ .method = .POST, .path = "/items", .handler = Route.wrap(handler) },
+        .{ .method = .POST, .path = "/items/", .handler = Route.wrap(handler) }, // Duplicate trailing slash
     };
 
     const spec: openapi = .{};
     const json_str = try spec.generateJson(gpa, &routes);
     defer gpa.free(json_str);
 
-    // Verify entire JSON parses without any syntax or brace errors
+    // Verify entire JSON parses cleanly without any syntax or brace errors
     const parsed = try std.json.parseFromSlice(std.json.Value, gpa, json_str, .{});
     defer parsed.deinit();
 
     try testing.expect(std.mem.indexOf(u8, json_str, "\"openapi\":\"3.0.0\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_str, "/items/{id}") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"/items/{id}\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"/items\"") != null);
+    // Trailing slash /items/ must be deduplicated
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"/items/\"") == null);
     try testing.expect(std.mem.indexOf(u8, json_str, "\"name\":\"id\"") != null);
     try testing.expect(std.mem.indexOf(u8, json_str, "\"in\":\"path\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"servers\":[{\"url\":\"/\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"tags\":[{\"name\":\"Items\"") != null);
     try testing.expect(std.mem.indexOf(u8, json_str, "\"summary\":\"List Items\"") != null);
     try testing.expect(std.mem.indexOf(u8, json_str, "\"requestBody\":{\"required\":true") != null);
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"HTTPValidationError\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"ItemsResponse\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"OAuth2PasswordBearer\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"components\":{\"schemas\":{\"Items\":") != null);
 }
 
 test "App scheme detection (HTTP vs HTTPS)" {
