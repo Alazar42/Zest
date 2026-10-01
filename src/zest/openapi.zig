@@ -333,6 +333,9 @@ pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []c
             try json_out.appendSlice(allocator, op_id);
             try json_out.append(allocator, '"');
 
+            const is_default = std.mem.eql(u8, tag, "Default");
+            const schema_ref_name = self.findSchemaName(tag) orelse if (!is_default) tag else null;
+
             // Path parameters (only if path includes :param)
             var param_count: usize = 0;
             var param_iter = std.mem.splitScalar(u8, r.path, '/');
@@ -351,7 +354,19 @@ pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []c
                         if (p_idx > 0) try json_out.append(allocator, ',');
                         p_idx += 1;
                         const p_name = seg[1..];
-                        const is_num = std.mem.endsWith(u8, p_name, "id") or std.mem.endsWith(u8, p_name, "Id");
+                        var is_num = false;
+                        if (schema_ref_name) |sn| {
+                            for (self.schemas.items) |s| {
+                                if (std.mem.eql(u8, s.name, sn)) {
+                                    if (std.mem.indexOf(u8, s.properties_json, "\"id\":{\"type\":\"integer\"") != null) {
+                                        is_num = true;
+                                    }
+                                    break;
+                                }
+                            }
+                        } else {
+                            is_num = std.mem.endsWith(u8, p_name, "id") or std.mem.endsWith(u8, p_name, "Id");
+                        }
                         const schema_type = if (is_num) "{\"type\":\"integer\"}" else "{\"type\":\"string\"}";
                         try json_out.appendSlice(allocator, "{\"name\":\"");
                         try json_out.appendSlice(allocator, p_name);
@@ -362,9 +377,6 @@ pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []c
                 }
                 try json_out.append(allocator, ']');
             }
-
-            const is_default = std.mem.eql(u8, tag, "Default");
-            const schema_ref_name = self.findSchemaName(tag) orelse if (!is_default) tag else null;
 
             // Request body for POST, PUT, PATCH with schema ref if available
             if ((r.method == .POST or r.method == .PUT or r.method == .PATCH) and schema_ref_name != null) {

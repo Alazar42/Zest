@@ -14,14 +14,13 @@ pub fn getAll(req: *zest.Request, res: *zest.Response) !void {
         for (products) |*p| p.deinit();
         req.allocator.free(products);
     }
-    // res.jsonValue automatically serializes Parsed model slices cleanly
     try res.jsonValue(products);
 }
 
-/// GET /api/v1/products/:id - Fetch single product by ID
+/// GET /api/v1/products/:id - Fetch single product by UUID
 pub fn getById(req: *zest.Request, res: *zest.Response) !void {
-    const id = req.paramInt("id", u32) orelse {
-        try res.status(.bad_request, "{\"error\": \"Invalid product ID\"}");
+    const id = req.param("id") orelse {
+        try res.status(.bad_request, "{\"error\": \"Missing product ID\"}");
         return;
     };
 
@@ -34,36 +33,26 @@ pub fn getById(req: *zest.Request, res: *zest.Response) !void {
     }
 }
 
-/// POST /api/v1/products - Creates product with automatic HTTP 422 validation and auto-increment ID
+/// POST /api/v1/products - Creates product with auto-generated UUID v4 if not provided
 pub fn create(req: *zest.Request, res: *zest.Response) !void {
     var parsed = (try req.validateJson(Product, res)) orelse return;
     defer parsed.deinit();
 
     var product = parsed.value;
-    if (product.id == null or product.id.? == 0) {
-        var max_id: u32 = 0;
-        var q = Product.model.query(&database.db, req.allocator);
-        const existing = try q.exec();
-        defer {
-            for (existing) |*p| p.deinit();
-            req.allocator.free(existing);
-        }
-        for (existing) |p| {
-            if (p.value.id) |existing_id| {
-                if (existing_id > max_id) max_id = existing_id;
-            }
-        }
-        product.id = max_id + 1;
+    var uuid_buf: [36]u8 = undefined;
+    if (product.id == null or product.id.?.len == 0) {
+        product.id = try req.allocator.dupe(u8, zest.uuid.v4(&uuid_buf));
     }
 
     try Product.model.save(&database.db, req.allocator, &product);
-    try res.status(.created, "{\"status\":\"created\"}");
+    const body = try std.fmt.allocPrint(req.allocator, "{{\"status\":\"created\",\"id\":\"{s}\"}}", .{product.id.?});
+    try res.status(.created, body);
 }
 
-/// DELETE /api/v1/products/:id - Delete product by ID
+/// DELETE /api/v1/products/:id - Delete product by UUID
 pub fn deleteProduct(req: *zest.Request, res: *zest.Response) !void {
-    const id = req.paramInt("id", u32) orelse {
-        try res.status(.bad_request, "{\"error\": \"Invalid product ID\"}");
+    const id = req.param("id") orelse {
+        try res.status(.bad_request, "{\"error\": \"Missing product ID\"}");
         return;
     };
 

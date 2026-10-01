@@ -820,3 +820,52 @@ test "Response.serializeJson with Parsed(T) and slice of Parsed(T)" {
     try testing.expect(std.mem.indexOf(u8, q_json, "ItemA") != null);
 }
 
+test "uuid v4 generation and formatting" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var buf: [36]u8 = undefined;
+    const u = uuid.v4(&buf);
+    try testing.expectEqual(@as(usize, 36), u.len);
+    try testing.expectEqual('-', u[8]);
+    try testing.expectEqual('-', u[13]);
+    try testing.expectEqual('-', u[18]);
+    try testing.expectEqual('-', u[23]);
+    try testing.expectEqual('4', u[14]); // RFC 4122 v4
+
+    const u_alloc = try uuid.v4Alloc(gpa);
+    defer gpa.free(u_alloc);
+    try testing.expectEqual(@as(usize, 36), u_alloc.len);
+    try testing.expectEqual('4', u_alloc[14]);
+}
+
+test "time module formatting and parsing" {
+    const testing = std.testing;
+
+    const t = time.now();
+    try testing.expect(t > 1700000000);
+
+    const dt = time.DateTime.fromEpoch(1700000000); // 2023-11-14 22:13:20 UTC
+    try testing.expectEqual(@as(u16, 2023), dt.year);
+    try testing.expectEqual(@as(u8, 11), dt.month);
+    try testing.expectEqual(@as(u8, 14), dt.day);
+    try testing.expectEqual(@as(u8, 22), dt.hour);
+    try testing.expectEqual(@as(u8, 13), dt.minute);
+    try testing.expectEqual(@as(u8, 20), dt.second);
+
+    var iso_buf: [32]u8 = undefined;
+    const iso = dt.toIso8601(&iso_buf);
+    try testing.expectEqualStrings("2023-11-14T22:13:20Z", iso);
+
+    var http_buf: [32]u8 = undefined;
+    const http = dt.toHttpDate(&http_buf);
+    try testing.expectEqualStrings("Tue, 14 Nov 2023 22:13:20 GMT", http);
+
+    const parsed = time.parseIso8601("2023-11-14T22:13:20Z").?;
+    try testing.expectEqual(dt.year, parsed.year);
+    try testing.expectEqual(dt.month, parsed.month);
+    try testing.expectEqual(dt.day, parsed.day);
+    try testing.expectEqual(dt.hour, parsed.hour);
+    try testing.expectEqual(dt.minute, parsed.minute);
+    try testing.expectEqual(dt.second, parsed.second);
+}

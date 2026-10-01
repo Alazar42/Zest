@@ -1,7 +1,7 @@
 const zest = @import("zest");
 
 pub const Product = struct {
-    id: ?u32 = null,
+    id: ?[]const u8 = null,
     name: []const u8,
     price: f64,
 

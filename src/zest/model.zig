@@ -101,6 +101,15 @@ pub fn Model(comptime Self: type) type {
             if (T == []const u8 or T == []u8) {
                 return id;
             }
+            if (@typeInfo(T) == .pointer) {
+                const ptr_info = @typeInfo(T).pointer;
+                if (ptr_info.size == .slice and ptr_info.child == u8) {
+                    return id;
+                }
+                if (ptr_info.size == .one and @typeInfo(ptr_info.child) == .array and @typeInfo(ptr_info.child).array.child == u8) {
+                    return id[0..];
+                }
+            }
             if (@typeInfo(T) == .optional) {
                 if (id) |val| {
                     return idToString(buf, val);
