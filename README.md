@@ -117,7 +117,7 @@ This updates `.hash` and `.url` in `build.zig.zon` to the latest remote HEAD com
 zig fetch --save git+https://github.com/Alazar42/Zest.git#main
 
 # Pin to a specific release tag
-zig fetch --save git+https://github.com/Alazar42/Zest.git#v0.1.0
+zig fetch --save git+https://github.com/Alazar42/Zest.git#v0.1.1
 
 # Pin to an exact commit SHA
 zig fetch --save git+https://github.com/Alazar42/Zest.git#<commit_sha>

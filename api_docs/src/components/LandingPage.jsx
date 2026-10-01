@@ -100,7 +100,7 @@ export default function LandingPage({ onGoToDocs, onSelectSection }) {
       {/* Hero Section */}
       <Flex direction="column" align="center" gap="4" my="8" style={{ textAlign: 'center' }}>
         <Badge size="2" variant="surface" color="gray" radius="full">
-          Zest v0.1.0 Released | Fast, Ergonomic Web Framework for Zig
+          Zest v0.1.1 Released | Fast, Ergonomic Web Framework for Zig
         </Badge>
 
         <Heading size="9" weight="bold" highContrast style={{ letterSpacing: '-0.04em', maxWidth: '850px' }}>

@@ -286,7 +286,7 @@ zig fetch --save git+https://github.com/Alazar42/Zest.git#main
 
 #### Pin to a specific release tag:
 \`\`\`bash
-zig fetch --save git+https://github.com/Alazar42/Zest.git#v0.1.0
+zig fetch --save git+https://github.com/Alazar42/Zest.git#v0.1.1
 \`\`\`
 
 #### Pin to an exact Git commit SHA:

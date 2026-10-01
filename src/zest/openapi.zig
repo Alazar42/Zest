@@ -349,7 +349,10 @@ pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []c
 /// Serves the interactive Swagger UI HTML page at `/docs`.
 pub fn serveDocsHtml(res: *Response, openapi_json_url: []const u8) !void {
     const allocator = if (res.request) |r| r.allocator else std.heap.page_allocator;
-    const html_content = try std.fmt.allocPrint(allocator,
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    try out.appendSlice(allocator,
         \\<!DOCTYPE html>
         \\<html lang="en">
         \\<head>
@@ -389,15 +392,23 @@ pub fn serveDocsHtml(res: *Response, openapi_json_url: []const u8) !void {
         \\    </div>
         \\    <div class="zest-links">
         \\      <a href="/redoc">ReDoc Documentation</a>
-        \\      <a href="{s}" target="_blank">OpenAPI Spec (JSON)</a>
+        \\      <a href="
+    );
+    try out.appendSlice(allocator, openapi_json_url);
+    try out.appendSlice(allocator,
+        \\" target="_blank">OpenAPI Spec (JSON)</a>
         \\    </div>
         \\  </div>
         \\  <div id="swagger-ui"></div>
         \\  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
         \\  <script>
-        \\    window.onload = () => {{
-        \\      window.ui = SwaggerUIBundle({{
-        \\        url: '{s}',
+        \\    window.onload = () => {
+        \\      window.ui = SwaggerUIBundle({
+        \\        url: '
+    );
+    try out.appendSlice(allocator, openapi_json_url);
+    try out.appendSlice(allocator,
+        \\',
         \\        dom_id: '#swagger-ui',
         \\        deepLinking: true,
         \\        persistAuthorization: true,
@@ -409,27 +420,29 @@ pub fn serveDocsHtml(res: *Response, openapi_json_url: []const u8) !void {
         \\        docExpansion: "list",
         \\        defaultModelsExpandDepth: 2,
         \\        defaultModelExpandDepth: 2,
-        \\        syntaxHighlight: {{ theme: "monokai" }},
+        \\        syntaxHighlight: { theme: "monokai" },
         \\        presets: [
         \\          SwaggerUIBundle.presets.apis,
         \\          SwaggerUIBundle.SwaggerUIStandalonePreset
         \\        ],
         \\        layout: "BaseLayout"
-        \\      }});
-        \\    }};
+        \\      });
+        \\    };
         \\  </script>
         \\</body>
         \\</html>
-    , .{ openapi_json_url, openapi_json_url });
-    defer allocator.free(html_content);
+    );
 
-    try res.html(html_content);
+    try res.html(out.items);
 }
 
 /// Serves the ReDoc documentation HTML page at `/redoc`.
 pub fn serveRedocHtml(res: *Response, openapi_json_url: []const u8) !void {
     const allocator = if (res.request) |r| r.allocator else std.heap.page_allocator;
-    const html_content = try std.fmt.allocPrint(allocator,
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    try out.appendSlice(allocator,
         \\<!DOCTYPE html>
         \\<html lang="en">
         \\<head>
@@ -457,19 +470,26 @@ pub fn serveRedocHtml(res: *Response, openapi_json_url: []const u8) !void {
         \\  <div class="zest-redoc-header">
         \\    <div class="zest-redoc-brand">
         \\      <span>⚡ Zest API</span>
-        \\      <span style="background:#10b981;color:#111827;font-size:0.75rem;padding:2px 8px;border-radius:9999px;font-weight:700;">ReDoc</span>
+        \\      <span style="background:#10b981;color:#111827;font-size:0.75rem;padding:2px 8px;border-radius:9999px;">ReDoc</span>
         \\    </div>
         \\    <div class="zest-redoc-links">
         \\      <a href="/docs">Swagger UI (/docs)</a>
-        \\      <a href="{s}" target="_blank">OpenAPI Spec (JSON)</a>
+        \\      <a href="
+    );
+    try out.appendSlice(allocator, openapi_json_url);
+    try out.appendSlice(allocator,
+        \\" target="_blank">OpenAPI Spec (JSON)</a>
         \\    </div>
         \\  </div>
-        \\  <redoc spec-url="{s}"></redoc>
+        \\  <redoc spec-url="
+    );
+    try out.appendSlice(allocator, openapi_json_url);
+    try out.appendSlice(allocator,
+        \\"></redoc>
         \\  <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
         \\</body>
         \\</html>
-    , .{ openapi_json_url, openapi_json_url });
-    defer allocator.free(html_content);
+    );
 
-    try res.html(html_content);
+    try res.html(out.items);
 }

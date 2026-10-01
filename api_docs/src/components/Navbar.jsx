@@ -52,7 +52,7 @@ export default function Navbar({ currentView, setCurrentView, onOpenSearch, onSe
             </Box>
             ZEST
           </Button>
-          <Badge size="1" variant="soft" color="gray">v0.1.0</Badge>
+          <Badge size="1" variant="soft" color="gray">v0.1.1</Badge>
         </Flex>
 
         {/* Center Links */}
