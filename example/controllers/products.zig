@@ -39,9 +39,8 @@ pub fn create(req: *zest.Request, res: *zest.Response) !void {
     defer parsed.deinit();
 
     var product = parsed.value;
-    var uuid_buf: [36]u8 = undefined;
     if (product.id == null or product.id.?.len == 0) {
-        product.id = try req.allocator.dupe(u8, zest.uuid.v4(&uuid_buf));
+        product.id = try zest.zuuid.new(req.allocator);
     }
 
     try Product.model.save(&database.db, req.allocator, &product);

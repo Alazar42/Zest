@@ -22,8 +22,8 @@ pub fn main() !void {
     try database.init(gpa, db_url);
     defer database.deinit();
 
-    try Product.model.save(&database.db, gpa, &.{ .id = "f47ac10b-58cc-4372-a567-0e02b2c3d479", .name = "Apple iPhone", .price = 999.99 });
-    try Product.model.save(&database.db, gpa, &.{ .id = "c9a646d3-9c61-4cc9-bc59-0026e79ad04d", .name = "MacBook Pro", .price = 1999.99 });
+    try Product.model.save(&database.db, gpa, &.{ .id = &zest.zuuid.generate(), .name = "Apple iPhone", .price = 999.99 });
+    try Product.model.save(&database.db, gpa, &.{ .id = &zest.zuuid.generate(), .name = "MacBook Pro", .price = 1999.99 });
 
     // 3. Initialize Zest Application
     var app = zest.init("127.0.0.1", port);

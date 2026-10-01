@@ -1,6 +1,7 @@
 const std = @import("std");
 const Db = @import("db.zig");
 const QueryBuilder = @import("query.zig").QueryBuilder;
+const uuid = @import("uuid.zig");
 
 /// Comptime Model interface that any struct can extend using:
 /// `pub const model = zest.Model(@This());`
@@ -134,10 +135,27 @@ pub fn Model(comptime Self: type) type {
 
         /// Saves (inserts or updates) a model instance in the database (SQL or NoSQL).
         pub fn save(db: *Db, allocator: std.mem.Allocator, instance: *const Self) !void {
-            var id_buf: [64]u8 = undefined;
-            const id_str = extractId(&id_buf, instance);
+            var inst = instance.*;
+            var uuid_buf: [36]u8 = undefined;
+            const pk = primaryKey();
 
-            const json_str = try toJson(instance, allocator);
+            inline for (@typeInfo(Self).@"struct".fields) |f| {
+                if (std.mem.eql(u8, f.name, pk)) {
+                    if (@typeInfo(f.type) == .optional) {
+                        const opt_child = @typeInfo(f.type).optional.child;
+                        if (opt_child == []const u8 or opt_child == []u8) {
+                            if (@field(inst, f.name) == null or @field(inst, f.name).?.len == 0) {
+                                @field(inst, f.name) = uuid.v4(&uuid_buf);
+                            }
+                        }
+                    }
+                }
+            }
+
+            var id_buf: [64]u8 = undefined;
+            const id_str = extractId(&id_buf, &inst);
+
+            const json_str = try toJson(&inst, allocator);
             defer allocator.free(json_str);
 
             try db.insert(tableName(), id_str, json_str);

@@ -19,6 +19,7 @@ pub const HandlerFn = Route.HandlerFn;
 pub const init = App.init;
 pub const time = @import("zest/time.zig");
 pub const uuid = @import("zest/uuid.zig");
+pub const zuuid = uuid;
 pub const zenv = @import("zest/zenv.zig");
 pub const validation = @import("zest/validation.zig");
 pub const validator = validation.validator;
@@ -837,6 +838,17 @@ test "uuid v4 generation and formatting" {
     defer gpa.free(u_alloc);
     try testing.expectEqual(@as(usize, 36), u_alloc.len);
     try testing.expectEqual('4', u_alloc[14]);
+
+    // zuuid.generate() by value
+    const gen_u = zuuid.generate();
+    try testing.expectEqual(@as(usize, 36), gen_u.len);
+    try testing.expect(zuuid.isValid(&gen_u));
+
+    // zuuid.new() allocator
+    const new_u = try zuuid.new(gpa);
+    defer gpa.free(new_u);
+    try testing.expectEqual(@as(usize, 36), new_u.len);
+    try testing.expect(zuuid.isValid(new_u));
 }
 
 test "time module formatting and parsing" {
