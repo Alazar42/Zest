@@ -34,12 +34,29 @@ pub fn getById(req: *zest.Request, res: *zest.Response) !void {
     }
 }
 
-/// POST /api/v1/products - Creates product with automatic HTTP 422 validation
+/// POST /api/v1/products - Creates product with automatic HTTP 422 validation and auto-increment ID
 pub fn create(req: *zest.Request, res: *zest.Response) !void {
     var parsed = (try req.validateJson(Product, res)) orelse return;
     defer parsed.deinit();
 
-    try Product.model.save(&database.db, req.allocator, &parsed.value);
+    var product = parsed.value;
+    if (product.id == null or product.id.? == 0) {
+        var max_id: u32 = 0;
+        var q = Product.model.query(&database.db, req.allocator);
+        const existing = try q.exec();
+        defer {
+            for (existing) |*p| p.deinit();
+            req.allocator.free(existing);
+        }
+        for (existing) |p| {
+            if (p.value.id) |existing_id| {
+                if (existing_id > max_id) max_id = existing_id;
+            }
+        }
+        product.id = max_id + 1;
+    }
+
+    try Product.model.save(&database.db, req.allocator, &product);
     try res.status(.created, "{\"status\":\"created\"}");
 }
 

@@ -5,6 +5,7 @@ const Response = @import("response.zig");
 pub const Schema = struct {
     name: []const u8,
     properties_json: []const u8,
+    required_json: ?[]const u8 = null,
 };
 
 title: []const u8 = "Zest API",
@@ -19,12 +20,18 @@ pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     for (self.schemas.items) |s| {
         allocator.free(s.name);
         allocator.free(s.properties_json);
+        if (s.required_json) |r| allocator.free(r);
     }
     self.schemas.deinit(allocator);
 }
 
 /// Registers a named schema with a JSON properties string.
 pub fn registerSchema(self: *Self, allocator: std.mem.Allocator, name: []const u8, properties_json: []const u8) !void {
+    try self.registerSchemaWithRequired(allocator, name, properties_json, null);
+}
+
+/// Registers a named schema with a JSON properties string and required fields array.
+pub fn registerSchemaWithRequired(self: *Self, allocator: std.mem.Allocator, name: []const u8, properties_json: []const u8, required_json: ?[]const u8) !void {
     for (self.schemas.items) |s| {
         if (std.mem.eql(u8, s.name, name)) return;
     }
@@ -32,9 +39,12 @@ pub fn registerSchema(self: *Self, allocator: std.mem.Allocator, name: []const u
     errdefer allocator.free(owned_name);
     const owned_props = try allocator.dupe(u8, properties_json);
     errdefer allocator.free(owned_props);
+    const owned_req = if (required_json) |r| try allocator.dupe(u8, r) else null;
+    errdefer if (owned_req) |r| allocator.free(r);
     try self.schemas.append(allocator, .{
         .name = owned_name,
         .properties_json = owned_props,
+        .required_json = owned_req,
     });
 }
 
@@ -89,6 +99,25 @@ pub fn generateModelPropertiesJson(comptime T: type) []const u8 {
         buf = buf ++ type_str;
     }
     buf = buf ++ "}";
+    return buf;
+}
+
+/// Inspects struct fields at comptime and generates a JSON array of non-optional required field names.
+pub fn generateModelRequiredJson(comptime T: type) []const u8 {
+    const type_info = @typeInfo(T);
+    if (type_info != .@"struct") return "[]";
+    const fields = type_info.@"struct".fields;
+    comptime var buf: []const u8 = "[";
+    comptime var count = 0;
+    inline for (fields) |f| {
+        const is_optional = @typeInfo(f.type) == .optional;
+        if (!is_optional) {
+            if (count > 0) buf = buf ++ ",";
+            buf = buf ++ "\"" ++ f.name ++ "\"";
+            count += 1;
+        }
+    }
+    buf = buf ++ "]";
     return buf;
 }
 
@@ -388,6 +417,12 @@ pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []c
         try json_out.appendSlice(allocator, s.name);
         try json_out.appendSlice(allocator, "\",\"type\":\"object\",\"properties\":");
         try json_out.appendSlice(allocator, s.properties_json);
+        if (s.required_json) |req_json| {
+            if (!std.mem.eql(u8, req_json, "[]")) {
+                try json_out.appendSlice(allocator, ",\"required\":");
+                try json_out.appendSlice(allocator, req_json);
+            }
+        }
         try json_out.append(allocator, '}');
     }
 

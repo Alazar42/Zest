@@ -101,6 +101,13 @@ pub fn Model(comptime Self: type) type {
             if (T == []const u8 or T == []u8) {
                 return id;
             }
+            if (@typeInfo(T) == .optional) {
+                if (id) |val| {
+                    return idToString(buf, val);
+                } else {
+                    return "0";
+                }
+            }
             return std.fmt.bufPrint(buf, "{any}", .{id}) catch "0";
         }
 

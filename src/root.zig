@@ -18,6 +18,7 @@ pub const Model = @import("zest/model.zig").Model;
 pub const HandlerFn = Route.HandlerFn;
 pub const init = App.init;
 pub const time = @import("zest/time.zig");
+pub const uuid = @import("zest/uuid.zig");
 pub const zenv = @import("zest/zenv.zig");
 pub const validation = @import("zest/validation.zig");
 pub const validator = validation.validator;
@@ -373,7 +374,7 @@ test "OpenAPI registerModel schema generation" {
     const gpa = testing.allocator;
 
     const DummyProduct = struct {
-        id: u32,
+        id: ?u32 = null,
         name: []const u8,
         price: f64,
     };
@@ -398,10 +399,64 @@ test "OpenAPI registerModel schema generation" {
     const parsed = try std.json.parseFromSlice(std.json.Value, gpa, json_str, .{});
     defer parsed.deinit();
 
-    // Verify Product schema is generated with exact types
-    try testing.expect(std.mem.indexOf(u8, json_str, "\"DummyProduct\":{\"title\":\"DummyProduct\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"},\"price\":{\"type\":\"number\"}}}") != null);
+    // Verify Product schema is generated with exact types and required fields
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"DummyProduct\":{\"title\":\"DummyProduct\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"nullable\":true},\"name\":{\"type\":\"string\"},\"price\":{\"type\":\"number\"}},\"required\":[\"name\",\"price\"]}") != null);
     // Tag "Default" must NOT appear in components.schemas
     try testing.expect(std.mem.indexOf(u8, json_str, "\"Default\":") == null);
+}
+
+test "Time library formatting and parsing" {
+    const testing = std.testing;
+
+    // 1. Fixed epoch test: 1700000000 = 2023-11-14 22:13:20 UTC (Tuesday)
+    const dt = time.DateTime.fromEpoch(1700000000);
+    try testing.expectEqual(@as(u16, 2023), dt.year);
+    try testing.expectEqual(@as(u8, 11), dt.month);
+    try testing.expectEqual(@as(u8, 14), dt.day);
+    try testing.expectEqual(@as(u8, 22), dt.hour);
+    try testing.expectEqual(@as(u8, 13), dt.minute);
+    try testing.expectEqual(@as(u8, 20), dt.second);
+    try testing.expectEqual(@as(u8, 2), dt.weekday); // Tuesday
+
+    // 2. ISO-8601 formatting
+    var iso_buf: [32]u8 = undefined;
+    const iso_str = dt.toIso8601(&iso_buf);
+    try testing.expectEqualStrings("2023-11-14T22:13:20Z", iso_str);
+
+    // 3. HTTP Date (RFC 7231 / RFC 1123) formatting
+    var http_buf: [32]u8 = undefined;
+    const http_str = dt.toHttpDate(&http_buf);
+    try testing.expectEqualStrings("Tue, 14 Nov 2023 22:13:20 GMT", http_str);
+
+    // 4. ISO-8601 parsing
+    const parsed_dt = time.parseIso8601("2026-10-01T20:44:26Z");
+    try testing.expect(parsed_dt != null);
+    try testing.expectEqual(@as(u16, 2026), parsed_dt.?.year);
+    try testing.expectEqual(@as(u8, 10), parsed_dt.?.month);
+    try testing.expectEqual(@as(u8, 1), parsed_dt.?.day);
+    try testing.expectEqual(@as(u8, 20), parsed_dt.?.hour);
+    try testing.expectEqual(@as(u8, 44), parsed_dt.?.minute);
+    try testing.expectEqual(@as(u8, 26), parsed_dt.?.second);
+
+    // 5. Direct now helpers
+    var now_iso_buf: [32]u8 = undefined;
+    const now_iso = time.iso8601(&now_iso_buf);
+    try testing.expect(now_iso.len == 20);
+    try testing.expect(now_iso[10] == 'T');
+    try testing.expect(now_iso[19] == 'Z');
+}
+
+test "UUID v4 generator" {
+    const testing = std.testing;
+
+    var buf: [36]u8 = undefined;
+    const id = uuid.v4(&buf);
+    try testing.expectEqual(@as(usize, 36), id.len);
+    try testing.expectEqual('-', id[8]);
+    try testing.expectEqual('-', id[13]);
+    try testing.expectEqual('-', id[18]);
+    try testing.expectEqual('-', id[23]);
+    try testing.expectEqual('4', id[14]); // Version 4
 }
 
 test "App scheme detection (HTTP vs HTTPS)" {

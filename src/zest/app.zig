@@ -181,7 +181,8 @@ pub fn enableDocsCustom(self: *Self, docs_path: []const u8, openapi_path: []cons
 pub fn registerModel(self: *Self, comptime T: type) !void {
     const name = openapi.typeBasename(T);
     const props = comptime openapi.generateModelPropertiesJson(T);
-    try self.openapi_spec.registerSchema(self.allocator, name, props);
+    const required = comptime openapi.generateModelRequiredJson(T);
+    try self.openapi_spec.registerSchemaWithRequired(self.allocator, name, props, required);
 }
 
 /// Registers a custom named schema with raw JSON properties under `components.schemas`.
