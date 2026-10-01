@@ -30,6 +30,7 @@ should_stop: std.atomic.Value(bool),
 server: ?net.Server,
 docs_enabled: bool,
 docs_path: []const u8,
+redoc_path: []const u8 = "/redoc",
 openapi_path: []const u8,
 openapi_spec: openapi,
 tls_enabled: bool = false,
@@ -68,6 +69,7 @@ pub fn initWithIo(
         .server = null,
         .docs_enabled = false,
         .docs_path = "/docs",
+        .redoc_path = "/redoc",
         .openapi_path = "/openapi.json",
         .openapi_spec = .{},
         .tls_enabled = false,
@@ -309,6 +311,9 @@ fn handleInternal(self: *Self, req: *Request, res: *Response, request: *std.http
     if (self.docs_enabled) {
         if (std.mem.eql(u8, path_only, self.docs_path)) {
             return try openapi.serveDocsHtml(res, self.openapi_path);
+        }
+        if (std.mem.eql(u8, path_only, self.redoc_path)) {
+            return try openapi.serveRedocHtml(res, self.openapi_path);
         }
         if (std.mem.eql(u8, path_only, self.openapi_path)) {
             const spec_json = try self.openapi_spec.generateJson(self.allocator, self.router.routes.items);

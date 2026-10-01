@@ -1247,24 +1247,89 @@ fn uploadAvatar(req: *zest.Request, res: *zest.Response) !void {
   },
 
   'openapi-swagger': {
-    title: 'Swagger UI & OpenAPI 3.0',
-    subtitle: 'Automated interactive documentation generation.',
+    title: 'Interactive Swagger UI & ReDoc Documentation',
+    subtitle: 'Zero-configuration OpenAPI 3.0 specification with interactive Swagger UI and 3-panel ReDoc.',
     content: `
-Call \`app.enableDocs()\` to automatically serve:
-- Interactive Swagger UI at \`/docs\`
-- Standard OpenAPI 3.0 JSON specification at \`/openapi.json\`
+Zest delivers automated, FastAPI-grade API documentation out of the box with zero runtime overhead or external generators. Simply calling \`app.enableDocs()\` activates:
 
-Customize titles, versions, and descriptions with \`app.enableDocsCustom(...)\`.
+- **Interactive Swagger UI** served at \`/docs\` with one-click **"Try it out"**, request duration timing, and live payload execution.
+- **Modern ReDoc Documentation** served at \`/redoc\` with responsive 3-panel layout for deep reading and client SDK references.
+- **OpenAPI 3.0.0 JSON Specification** served at \`/openapi.json\` compliant with OpenAPI, Postman, and code generation tools.
+- **Top-Level Bearer JWT Authorization**: Green **"Authorize"** button in Swagger UI to test protected routes with token persistence across refreshes.
+
+---
+
+### What Makes Zest's Docs FastAPI-Grade?
+
+1. **Auto-Discovered Domain Resources & Tags**:
+   Zest automatically inspects registered routes, strips common prefixes (\`/api/v1\`), and groups endpoints by domain resource (e.g. \`Products\`, \`Users\`, \`Auth\`).
+
+2. **Full Data Models & Schemas**:
+   The documentation engine populates the OpenAPI \`components.schemas\` section with:
+   - \`{Resource}Response\`: Typed model attributes (\`id\`, \`name\`, \`description\`, \`price\`, \`is_active\`, \`created_at\`).
+   - \`{Resource}Create\`: Input payload schema for creation and updates.
+   - \`HTTPValidationError\` & \`ValidationError\`: FastAPI standard validation error model with \`loc\` (path/body/query), \`msg\`, and error \`type\`.
+   - \`ErrorResponse\`: Standardized error message and HTTP status code schema.
+   - \`SuccessMessage\`: Standard confirmation object for \`DELETE\` endpoints.
+
+3. **Interactive Request Payloads & Examples**:
+   When testing \`POST\`, \`PUT\`, or \`PATCH\` endpoints, Swagger UI is pre-populated with realistic example JSON payloads so you can test endpoints with a single click.
+
+4. **Typed Path & Query Parameters**:
+   - Path parameters like \`:id\` are automatically typed as \`integer (int64)\`, while parameters like \`:slug\` or \`:username\` are typed as \`string\`.
+   - List endpoints automatically expose pagination query parameters (\`limit\`, \`offset\`) and search filter query parameters (\`search\`, \`sort_by\`, \`order\`).
+
+5. **JWT Bearer Token Security**:
+   Swagger UI includes the **Authorize** lock button configured with HTTP Bearer format (\`OAuth2PasswordBearer\`). Once authorized, your JWT token is automatically included as an \`Authorization: Bearer <token>\` header for all requests.
     `,
     codeExamples: [
       {
-        title: 'Enabling OpenAPI Docs',
+        title: 'Enabling Documentation',
         language: 'zig',
-        code: `var app = zest.init("127.0.0.1", 8000);
-defer app.deinit();
+        code: `const std = @import("std");
+const zest = @import("zest");
 
-// Enables Swagger UI at http://127.0.0.1:8000/docs
-app.enableDocs();`
+pub fn main() !void {
+    var app = zest.init("127.0.0.1", 8000);
+    defer app.deinit();
+
+    // Registers /docs (Swagger UI), /redoc (ReDoc), and /openapi.json (Spec)
+    app.enableDocs();
+
+    // Register routes
+    try app.get("/api/v1/products", listProducts);
+    try app.get("/api/v1/products/:id", getProduct);
+    try app.post("/api/v1/products", createProduct);
+    try app.delete("/api/v1/products/:id", deleteProduct);
+
+    std.log.info("Swagger UI available at: http://127.0.0.1:8000/docs", .{});
+    std.log.info("ReDoc available at:      http://127.0.0.1:8000/redoc", .{});
+    try app.listen();
+}`
+      },
+      {
+        title: 'Customizing Documentation Metadata',
+        language: 'zig',
+        code: `// Customize endpoint URLs and API branding
+app.enableDocsCustom(
+    "/api/documentation",    // Custom Swagger UI path
+    "/api/v1/openapi.json",  // Custom OpenAPI spec path
+    "E-Commerce Cloud API",  // API Title
+    "2.4.0",                 // API Version
+    "Production API for order processing and inventory management" // Description
+);`
+      },
+      {
+        title: 'Accessing Raw OpenAPI Specification',
+        language: 'bash',
+        code: `# Inspect the raw OpenAPI 3.0 JSON specification
+curl -s http://127.0.0.1:8000/openapi.json | jq .
+
+# Generate TypeScript client or SDK using openapi-generator
+npx @openapitools/openapi-generator-cli generate \\
+  -i http://127.0.0.1:8000/openapi.json \\
+  -g typescript-axios \\
+  -o ./client-sdk`
       }
     ]
   },

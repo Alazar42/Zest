@@ -354,6 +354,13 @@ test "OpenAPI JSON specification generator" {
     try testing.expect(std.mem.indexOf(u8, json_str, "/items/{id}") != null);
     try testing.expect(std.mem.indexOf(u8, json_str, "\"name\":\"id\"") != null);
     try testing.expect(std.mem.indexOf(u8, json_str, "\"in\":\"path\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"servers\":[{\"url\":\"/\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"tags\":[{\"name\":\"Items\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"summary\":\"List Items\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"requestBody\":{\"required\":true") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"HTTPValidationError\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"ItemsResponse\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"OAuth2PasswordBearer\"") != null);
 }
 
 test "App scheme detection (HTTP vs HTTPS)" {
