@@ -651,3 +651,69 @@ test "Model relationships hasMany and belongsTo" {
         try testing.expectEqualStrings("Grace Hopper", author_opt.?.value.name);
     }
 }
+
+test "Response.serializeJson with Parsed(T) and slice of Parsed(T)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const Item = struct {
+        id: u32,
+        title: []const u8,
+    };
+
+    const raw1 = "{\"id\":10,\"title\":\"Keyboard\"}";
+    const raw2 = "{\"id\":20,\"title\":\"Mouse\"}";
+
+    const p1 = try std.json.parseFromSlice(Item, gpa, raw1, .{});
+    defer p1.deinit();
+    const p2 = try std.json.parseFromSlice(Item, gpa, raw2, .{});
+    defer p2.deinit();
+
+    // 1. Single Parsed instance
+    const s1 = try Response.serializeJson(gpa, p1);
+    defer gpa.free(s1);
+    try testing.expect(std.mem.indexOf(u8, s1, "\"id\":10") != null);
+    try testing.expect(std.mem.indexOf(u8, s1, "\"title\":\"Keyboard\"") != null);
+
+    // 2. Slice of Parsed instances (the exact return type of QueryBuilder.exec())
+    var list = [_]std.json.Parsed(Item){ p1, p2 };
+    const s2 = try Response.serializeJson(gpa, list[0..]);
+    defer gpa.free(s2);
+    try testing.expect(std.mem.startsWith(u8, s2, "["));
+    try testing.expect(std.mem.endsWith(u8, s2, "]"));
+    try testing.expect(std.mem.indexOf(u8, s2, "\"id\":10") != null);
+    try testing.expect(std.mem.indexOf(u8, s2, "\"id\":20") != null);
+
+    // 3. Optional Parsed
+    const opt_some: ?std.json.Parsed(Item) = p1;
+    const s3 = try Response.serializeJson(gpa, opt_some);
+    defer gpa.free(s3);
+    try testing.expect(std.mem.indexOf(u8, s3, "\"id\":10") != null);
+
+    const opt_none: ?std.json.Parsed(Item) = null;
+    const s4 = try Response.serializeJson(gpa, opt_none);
+    defer gpa.free(s4);
+    try testing.expectEqualStrings("null", s4);
+
+    // 4. QueryBuilder.exec() direct serialization
+    var db = Db.initNoSql(gpa);
+    defer db.deinit();
+
+    const Prod = struct {
+        id: u32,
+        name: []const u8,
+        pub const model = Model(@This());
+    };
+    try Prod.model.save(&db, gpa, &.{ .id = 1, .name = "ItemA" });
+    var q = Prod.model.query(&db, gpa);
+    const products = try q.exec();
+    defer {
+        for (products) |*p| p.deinit();
+        gpa.free(products);
+    }
+    const q_json = try Response.serializeJson(gpa, products);
+    defer gpa.free(q_json);
+    try testing.expect(std.mem.startsWith(u8, q_json, "["));
+    try testing.expect(std.mem.indexOf(u8, q_json, "ItemA") != null);
+}
+

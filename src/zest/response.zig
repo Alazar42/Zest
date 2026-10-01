@@ -66,10 +66,69 @@ pub fn json(self: *Self, content: []const u8) !void {
     try self.sendWithHeaders(content, .ok, "application/json; charset=utf-8");
 }
 
-/// Automatically serializes any Zig struct, Model, slice, or value to JSON and responds with HTTP 200 OK.
+fn isParsed(comptime T: type) bool {
+    const Actual = switch (@typeInfo(T)) {
+        .pointer => |ptr| if (ptr.size == .one) ptr.child else return false,
+        else => T,
+    };
+    if (@typeInfo(Actual) == .@"struct") {
+        return @hasField(Actual, "arena") and @hasField(Actual, "value");
+    }
+    return false;
+}
+
+fn isParsedSlice(comptime T: type) bool {
+    var Current = T;
+    while (@typeInfo(Current) == .pointer and @typeInfo(Current).pointer.size == .one) {
+        Current = @typeInfo(Current).pointer.child;
+    }
+    switch (@typeInfo(Current)) {
+        .pointer => |ptr| {
+            if (ptr.size == .slice) {
+                return isParsed(ptr.child);
+            }
+        },
+        .array => |arr| {
+            return isParsed(arr.child);
+        },
+        else => {},
+    }
+    return false;
+}
+
+/// Helper to serialize any Zig value, Model, Parsed(T), or slice of Parsed(T) to JSON string.
+pub fn serializeJson(allocator: std.mem.Allocator, val: anytype) ![]u8 {
+    const T = @TypeOf(val);
+
+    if (comptime @typeInfo(T) == .optional) {
+        if (val) |v| {
+            return serializeJson(allocator, v);
+        } else {
+            return allocator.dupe(u8, "null");
+        }
+    } else if (comptime isParsed(T)) {
+        return std.json.Stringify.valueAlloc(allocator, val.value, .{});
+    } else if (comptime isParsedSlice(T)) {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        try out.append(allocator, '[');
+        for (val, 0..) |item, i| {
+            if (i > 0) try out.append(allocator, ',');
+            const item_json = try std.json.Stringify.valueAlloc(allocator, item.value, .{});
+            defer allocator.free(item_json);
+            try out.appendSlice(allocator, item_json);
+        }
+        try out.append(allocator, ']');
+        return out.toOwnedSlice(allocator);
+    } else {
+        return std.json.Stringify.valueAlloc(allocator, val, .{});
+    }
+}
+
+/// Automatically serializes any Zig struct, Model, slice, Parsed(T), or value to JSON and responds with HTTP 200 OK.
 pub fn jsonValue(self: *Self, val: anytype) !void {
     const allocator = if (self.request) |r| r.allocator else std.heap.page_allocator;
-    const json_str = try std.json.Stringify.valueAlloc(allocator, val, .{});
+    const json_str = try serializeJson(allocator, val);
     defer allocator.free(json_str);
     try self.json(json_str);
 }

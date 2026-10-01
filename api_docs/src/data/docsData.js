@@ -5,9 +5,9 @@ export const DOCS_SECTIONS = [
     items: [
       { id: 'introduction', title: 'Introduction' },
       { id: 'prerequisites', title: 'Prerequisites' },
-      { id: 'installation', title: 'Installation' },
+      { id: 'installation', title: 'Installation & zig init' },
       { id: 'build-zig', title: 'Configuring build.zig' },
-      { id: 'quickstart', title: 'Quickstart Tutorial' }
+      { id: 'quickstart', title: 'Quickstart & Architecture' }
     ]
   },
   {
@@ -126,23 +126,48 @@ sudo dnf install -y sqlite-devel libpq-devel
   },
 
   'installation': {
-    title: 'Package Installation',
-    subtitle: 'Adding Zest to your project using the standard Zig package manager.',
+    title: 'Package Installation & Setup',
+    subtitle: 'Adding Zest to your project using zig init or an existing repository.',
     content: `
-Zest integrates directly into Zig's native package manager. In your project root, execute the \`zig fetch\` command:
+Zest integrates directly into Zig's native package manager without external package tools. You can start either from a brand new project initialized with \`zig init\` or add Zest to an existing codebase.
+
+### Option A: Starting a New Project with \`zig init\`
+
+To create a brand new Zig project with Zest:
+
+\`\`\`bash
+# 1. Create a new project directory
+mkdir my-zest-api && cd my-zest-api
+
+# 2. Initialize a standard Zig executable & library structure
+zig init
+
+# 3. Add Zest as a dependency to your build.zig.zon
+zig fetch --save git+https://github.com/Alazar42/Zest.git
+\`\`\`
+
+The \`zig init\` command generates:
+- \`build.zig\`: The build script orchestrating your compilation.
+- \`build.zig.zon\`: The Zig Object Notation package manifest.
+- \`src/main.zig\`: The executable entrypoint.
+- \`src/root.zig\`: The library entrypoint.
+
+### Option B: Adding to an Existing Project
+
+If you already have a Zig project, simply navigate to your project root and fetch Zest:
 
 \`\`\`bash
 zig fetch --save git+https://github.com/Alazar42/Zest.git
 \`\`\`
 
-This automatically computes the package cryptographic hash and registers Zest in your \`build.zig.zon\` dependencies manifest.
+This automatically computes the SHA-256 cryptographic hash and registers Zest under \`.dependencies\` in your \`build.zig.zon\`.
     `,
     codeExamples: [
       {
         title: 'Resulting build.zig.zon snippet',
         language: 'zig',
         code: `.{
-    .name = .my_app,
+    .name = .my_zest_api,
     .version = "0.1.0",
     .fingerprint = 0xe5383c71202cbc31,
     .minimum_zig_version = "0.16.0",
@@ -160,13 +185,14 @@ This automatically computes the package cryptographic hash and registers Zest in
 
   'build-zig': {
     title: 'Configuring build.zig (Line-by-Line)',
-    subtitle: 'Integrate Zest into any existing build script without restructuring your project.',
+    subtitle: 'Integrate Zest into zig init or existing build scripts with only two lines.',
     content: `
-Many developers already have a custom \`build.zig\` configured with compiler flags, targets, and assets. You **do not** need to replace your build script. You only need to add two specific lines:
+Configuring \`build.zig\` requires only two additions: declaring the package dependency and importing the module into your executable.
 
-### Step 1: Fetch the Dependency in build(b)
-Add this line inside your \`pub fn build(b: *std.Build) void\` function:
+### 1. For Standard \`zig init\` Projects
+When you initialize a project using \`zig init\`, Zig creates an executable \`exe = b.addExecutable(...)\`. You only need to add:
 
+1. **Declare the dependency** (right after target and optimize options):
 \`\`\`zig
 const zest_dep = b.dependency("zest", .{
     .target = target,
@@ -174,20 +200,12 @@ const zest_dep = b.dependency("zest", .{
 });
 \`\`\`
 
-### Step 2: Import Zest into your Executable
-Where your executable (\`exe\`) is defined, add the import to the root module:
-
+2. **Add the import to your executable**:
 \`\`\`zig
-// If your project uses standard b.addExecutable:
 exe.root_module.addImport("zest", zest_dep.module("zest"));
 \`\`\`
 
-*(Alternatively, if your build script defines modules via \`b.createModule\`)*:
-\`\`\`zig
-.imports = &.{
-    .{ .name = "zest", .module = zest_dep.module("zest") },
-},
-\`\`\`
+> **Automatic Driver Linking**: Zest automatically links \`sqlite3\`, \`libpq\` (PostgreSQL), and \`libc\` into the imported module. You do not need to manually configure \`linkSystemLibrary\` in your own build script unless your project calls C APIs directly.
     `,
     codeExamples: [
       {
@@ -222,39 +240,225 @@ exe.root_module.addImport("zest", zest_dep.module("zest"));
   },
 
   'quickstart': {
-    title: 'Quickstart Tutorial',
-    subtitle: 'Build and run a complete RESTful service in 60 seconds.',
+    title: 'Quickstart & Project Architecture',
+    subtitle: 'Structuring scalable Zest applications with controllers, models, and routes.',
     content: `
-Let's assemble a complete, production-ready REST API featuring models, validation, environment loading, and query filtering.
+While Zest easily supports single-file applications for quick scripts and microservices, production web applications scale best with a clean separation of concerns:
+
+- **\`src/models/\`**: Domain structs, validation schemas, and ORM table mappings.
+- **\`src/database.zig\`**: Centralized database connection lifecycle and pooling.
+- **\`src/controllers/\`**: HTTP handlers that process requests, query data, and return responses.
+- **\`src/routes/\`**: Endpoint declarations grouped by sub-router or domain resource.
+- **\`src/main.zig\`**: Application entrypoint: loads configuration, configures middlewares, mounts routes, and starts the server.
+
+### Recommended Project Layout
+
+\`\`\`text
+my-zest-api/
+├── build.zig
+├── build.zig.zon
+└── src/
+    ├── main.zig              # Entrypoint & server bootstrap
+    ├── database.zig          # Shared database connection
+    ├── models/
+    │   └── product.zig       # Product schema & validation
+    ├── controllers/
+    │   └── products.zig      # Request handlers & logic
+    └── routes/
+        └── products.zig      # Sub-router route definitions
+\`\`\`
+
+Review the complete working files below. You can copy this structure directly into your project:
     `,
     codeExamples: [
       {
-        title: 'src/main.zig',
+        title: '1. src/models/product.zig (Model & Validation Schema)',
+        language: 'zig',
+        code: `const zest = @import("zest");
+
+pub const Product = struct {
+    id: u32,
+    name: []const u8,
+    price: f64,
+
+    // Universal Comptime ORM Mixin (SQLite, PostgreSQL, MongoDB)
+    pub const model = zest.Model(@This());
+
+    // Automated FastAPI-grade Schema Validation
+    pub fn validate(self: *const @This(), errs: *zest.ValidationErrors) void {
+        zest.validator.requireMinLength(errs, "name", self.name, 3);
+        zest.validator.requireMin(errs, "price", self.price, 0.01);
+    }
+};`
+      },
+      {
+        title: '2. src/database.zig (Database Lifecycle)',
         language: 'zig',
         code: `const std = @import("std");
 const zest = @import("zest");
 
-// 1. Define Model with automated validation and ORM mixin
+pub var db: zest.Db = undefined;
+
+/// Connects to real SQLite, PostgreSQL / Supabase, or MongoDB based on the URL scheme.
+pub fn init(allocator: std.mem.Allocator, url: []const u8) !void {
+    db = try zest.Db.connect(allocator, url);
+}
+
+pub fn deinit() void {
+    db.deinit();
+}`
+      },
+      {
+        title: '3. src/controllers/products.zig (Controller Handlers)',
+        language: 'zig',
+        code: `const std = @import("std");
+const zest = @import("zest");
+const database = @import("../database.zig");
+const Product = @import("../models/product.zig").Product;
+
+/// GET /api/v1/products - Filter and list products
+pub fn getAll(req: *zest.Request, res: *zest.Response) !void {
+    var q = Product.model.query(&database.db, req.allocator);
+    if (req.queryParam("search")) |s| {
+        _ = q.where("name", .contains, s);
+    }
+    const products = try q.exec();
+    defer {
+        for (products) |*p| p.deinit();
+        req.allocator.free(products);
+    }
+    // res.jsonValue automatically serializes Parsed model slices cleanly
+    try res.jsonValue(products);
+}
+
+/// GET /api/v1/products/:id - Fetch single product by ID
+pub fn getById(req: *zest.Request, res: *zest.Response) !void {
+    const id = req.paramInt("id", u32) orelse {
+        try res.status(.bad_request, "{\\"error\\": \\"Invalid product ID\\"}");
+        return;
+    };
+
+    var found = try Product.model.find(&database.db, req.allocator, id);
+    if (found) |*p| {
+        defer p.deinit();
+        try res.jsonValue(p.value);
+    } else {
+        try res.status(.not_found, "{\\"error\\": \\"Product not found\\"}");
+    }
+}
+
+/// POST /api/v1/products - Creates product with automatic HTTP 422 validation
+pub fn create(req: *zest.Request, res: *zest.Response) !void {
+    var parsed = (try req.validateJson(Product, res)) orelse return;
+    defer parsed.deinit();
+
+    try Product.model.save(&database.db, req.allocator, &parsed.value);
+    try res.status(.created, "{\\"status\\":\\"created\\"}");
+}
+
+/// DELETE /api/v1/products/:id - Delete product by ID
+pub fn deleteProduct(req: *zest.Request, res: *zest.Response) !void {
+    const id = req.paramInt("id", u32) orelse {
+        try res.status(.bad_request, "{\\"error\\": \\"Invalid product ID\\"}");
+        return;
+    };
+
+    if (Product.model.delete(&database.db, id)) {
+        try res.json("{\\"message\\": \\"Product deleted successfully\\"}");
+    } else {
+        try res.status(.not_found, "{\\"error\\": \\"Product not found\\"}");
+    }
+}`
+      },
+      {
+        title: '4. src/routes/products.zig (Route Registrar)',
+        language: 'zig',
+        code: `const zest = @import("zest");
+const products_ctrl = @import("../controllers/products.zig");
+
+/// Registers all product endpoints on the provided router or route group.
+pub fn register(g: *zest.Group) !void {
+    try g.get("", products_ctrl.getAll);
+    try g.get("/", products_ctrl.getAll);
+    try g.get("/:id", products_ctrl.getById);
+    try g.post("", products_ctrl.create);
+    try g.post("/", products_ctrl.create);
+    try g.delete("/:id", products_ctrl.deleteProduct);
+}`
+      },
+      {
+        title: '5. src/main.zig (Application Entrypoint)',
+        language: 'zig',
+        code: `const std = @import("std");
+const zest = @import("zest");
+const database = @import("database.zig");
+const products_routes = @import("routes/products.zig");
+
+fn welcome(res: *zest.Response) !void {
+    try res.json("{\\"message\\": \\"Welcome to Zest API! Visit /docs for Swagger UI.\\"}");
+}
+
+pub fn main() !void {
+    const gpa = std.heap.page_allocator;
+
+    // 1. Load .env configuration
+    zest.zenv.load(gpa) catch {};
+    defer zest.zenv.deinit();
+
+    const db_url = zest.zenv.getOr("DATABASE_URL", "sqlite:products.db");
+    const port = zest.zenv.getInt("PORT", u16) orelse 8000;
+
+    // 2. Initialize Database (SQLite, PostgreSQL, or MongoDB)
+    try database.init(gpa, db_url);
+    defer database.deinit();
+
+    // 3. Initialize Zest Application
+    var app = zest.init("127.0.0.1", port);
+    defer app.deinit();
+
+    // 4. Middlewares & Swagger UI
+    try app.use(zest.middleware.logger);
+    try app.use(zest.middleware.cors(.{}));
+    app.enableDocs(); // Serves Swagger UI at /docs and spec at /openapi.json
+
+    // 5. Mount Root Route & Sub-Router Group
+    try app.get("/", welcome);
+
+    var api = app.group("/api/v1");
+    var products_group = try api.group("/products");
+    try products_routes.register(&products_group);
+
+    // 6. Start Server
+    std.log.info("Server listening on http://127.0.0.1:{d}", .{port});
+    try app.serve();
+}`
+      },
+      {
+        title: 'Alternative: Single-File Microservice (src/main.zig)',
+        language: 'zig',
+        code: `const std = @import("std");
+const zest = @import("zest");
+
+// For quick scripts or microservices, all components can live in one file:
 const Product = struct {
     id: u32,
-    title: []const u8,
+    name: []const u8,
     price: f64,
 
     pub const model = zest.Model(@This());
 
     pub fn validate(self: *const @This(), errs: *zest.ValidationErrors) void {
-        zest.validator.requireMinLength(errs, "title", self.title, 3);
+        zest.validator.requireMinLength(errs, "name", self.name, 3);
         zest.validator.requireMin(errs, "price", self.price, 0.01);
     }
 };
 
 var db: zest.Db = undefined;
 
-// 2. Controller Handlers
 fn listProducts(req: *zest.Request, res: *zest.Response) !void {
     var q = Product.model.query(&db, req.allocator);
     if (req.queryParam("search")) |s| {
-        _ = q.where("title", .contains, s);
+        _ = q.where("name", .contains, s);
     }
     const products = try q.exec();
     defer {
@@ -265,7 +469,6 @@ fn listProducts(req: *zest.Request, res: *zest.Response) !void {
 }
 
 fn createProduct(req: *zest.Request, res: *zest.Response) !void {
-    // Automatically validates payload, responds with HTTP 422 if invalid
     var parsed = (try req.validateJson(Product, res)) orelse return;
     defer parsed.deinit();
 
@@ -276,24 +479,18 @@ fn createProduct(req: *zest.Request, res: *zest.Response) !void {
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
 
-    // Load .env
     zest.zenv.load(gpa) catch {};
     defer zest.zenv.deinit();
 
-    const db_url = zest.zenv.getOr("DATABASE_URL", "sqlite:products.db");
-    const port = zest.zenv.getInt("PORT", u16) orelse 8000;
-
-    // Initialize Database
-    db = try zest.Db.connect(gpa, db_url);
+    db = try zest.Db.connect(gpa, zest.zenv.getOr("DATABASE_URL", "sqlite:products.db"));
     defer db.deinit();
 
-    // Initialize Zest Application
-    var app = zest.init("127.0.0.1", port);
+    var app = zest.init("127.0.0.1", zest.zenv.getInt("PORT", u16) orelse 8000);
     defer app.deinit();
 
     try app.use(zest.middleware.logger);
     try app.use(zest.middleware.cors(.{}));
-    app.enableDocs(); // Swagger UI at /docs
+    app.enableDocs();
 
     try app.get("/products", listProducts);
     try app.post("/products", createProduct);
