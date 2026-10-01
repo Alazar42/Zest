@@ -55,7 +55,7 @@ sudo pacman -S sqlite postgresql-libs
 In your Zig project directory, run:
 
 ```bash
-zig fetch --save git+https://github.com/mickycodes/Zest.git
+zig fetch --save git+https://github.com/Alazar42/Zest.git
 ```
 
 This will automatically add Zest to your `build.zig.zon` dependencies.
@@ -333,4 +333,4 @@ zig build test
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](file:///home/mickycodes/Projects/ZigProjects/Zest/LICENSE) for details.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
