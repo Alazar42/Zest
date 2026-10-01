@@ -2,11 +2,95 @@ const std = @import("std");
 const Route = @import("route.zig");
 const Response = @import("response.zig");
 
+pub const Schema = struct {
+    name: []const u8,
+    properties_json: []const u8,
+};
+
 title: []const u8 = "Zest API",
 version: []const u8 = "1.0.0",
 description: []const u8 = "Fast, modern web API powered by Zest and Zig",
+schemas: std.ArrayList(Schema) = .empty,
 
 const Self = @This();
+
+/// Frees memory allocated by registered schemas.
+pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+    for (self.schemas.items) |s| {
+        allocator.free(s.name);
+        allocator.free(s.properties_json);
+    }
+    self.schemas.deinit(allocator);
+}
+
+/// Registers a named schema with a JSON properties string.
+pub fn registerSchema(self: *Self, allocator: std.mem.Allocator, name: []const u8, properties_json: []const u8) !void {
+    for (self.schemas.items) |s| {
+        if (std.mem.eql(u8, s.name, name)) return;
+    }
+    const owned_name = try allocator.dupe(u8, name);
+    errdefer allocator.free(owned_name);
+    const owned_props = try allocator.dupe(u8, properties_json);
+    errdefer allocator.free(owned_props);
+    try self.schemas.append(allocator, .{
+        .name = owned_name,
+        .properties_json = owned_props,
+    });
+}
+
+/// Matches a tag name to a registered schema name, supporting singular and plural variations.
+pub fn findSchemaName(self: *const Self, tag: []const u8) ?[]const u8 {
+    for (self.schemas.items) |s| {
+        if (std.ascii.eqlIgnoreCase(s.name, tag)) return s.name;
+        if (std.mem.endsWith(u8, tag, "s") and std.ascii.eqlIgnoreCase(s.name, tag[0 .. tag.len - 1])) {
+            return s.name;
+        }
+        if (std.mem.endsWith(u8, s.name, "s") and std.ascii.eqlIgnoreCase(s.name[0 .. s.name.len - 1], tag)) {
+            return s.name;
+        }
+    }
+    return null;
+}
+
+/// Extracts the unqualified struct name from a Zig type at comptime (e.g. `models.product.Product` -> `Product`).
+pub fn typeBasename(comptime T: type) []const u8 {
+    const full_name = @typeName(T);
+    var start: usize = 0;
+    inline for (full_name, 0..) |c, i| {
+        if (c == '.') start = i + 1;
+    }
+    return full_name[start..];
+}
+
+/// Inspects struct fields at comptime and generates a valid OpenAPI JSON schema properties object.
+pub fn generateModelPropertiesJson(comptime T: type) []const u8 {
+    const type_info = @typeInfo(T);
+    if (type_info != .@"struct") return "{}";
+    const fields = type_info.@"struct".fields;
+    comptime var buf: []const u8 = "{";
+    inline for (fields, 0..) |f, i| {
+        if (i > 0) buf = buf ++ ",";
+        buf = buf ++ "\"" ++ f.name ++ "\":";
+        const f_type = @typeInfo(f.type);
+        const type_str = switch (f_type) {
+            .int, .comptime_int => "{\"type\":\"integer\"}",
+            .float, .comptime_float => "{\"type\":\"number\"}",
+            .bool => "{\"type\":\"boolean\"}",
+            .pointer => |ptr| if (ptr.child == u8) "{\"type\":\"string\"}" else "{\"type\":\"string\"}",
+            .optional => |opt| switch (@typeInfo(opt.child)) {
+                .int, .comptime_int => "{\"type\":\"integer\",\"nullable\":true}",
+                .float, .comptime_float => "{\"type\":\"number\",\"nullable\":true}",
+                .bool => "{\"type\":\"boolean\",\"nullable\":true}",
+                .pointer => |ptr| if (ptr.child == u8) "{\"type\":\"string\",\"nullable\":true}" else "{\"type\":\"string\",\"nullable\":true}",
+                else => "{\"type\":\"string\",\"nullable\":true}",
+            },
+            else => "{\"type\":\"string\"}",
+        };
+        buf = buf ++ type_str;
+    }
+    buf = buf ++ "}";
+    return buf;
+}
 
 /// Converts a Zest path with `:param` (e.g. `/items/:id`) into a normalized OpenAPI path template (e.g. `/items/{id}`).
 /// Strips duplicate trailing slashes (e.g. `/items/` -> `/items`, except for root `/`).
@@ -102,13 +186,13 @@ pub fn generateOperationId(buf: *[128]u8, method: std.http.Method, path: []const
 }
 
 /// Generates a clean, valid OpenAPI 3.0.0 JSON schema string containing routes and schemas only.
-/// Normalizes paths and deduplicates identical methods on the same route.
+/// Normalizes paths, deduplicates identical methods on the same route, and resolves typed schemas.
 /// Caller owns the returned JSON string slice.
 pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []const Route) ![]u8 {
     var json_out: std.ArrayList(u8) = .empty;
     errdefer json_out.deinit(allocator);
 
-    // Collect unique domain tags for schema generation
+    // Collect unique domain tags (excluding "Default")
     var unique_tags = std.StringHashMap(void).init(allocator);
     defer {
         var it = unique_tags.keyIterator();
@@ -121,7 +205,7 @@ pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []c
     for (routes) |r| {
         var tag_buf: [64]u8 = undefined;
         const raw_tag = extractTag(&tag_buf, r.path);
-        if (!unique_tags.contains(raw_tag)) {
+        if (!std.mem.eql(u8, raw_tag, "Default") and !unique_tags.contains(raw_tag)) {
             const owned = try allocator.dupe(u8, raw_tag);
             try unique_tags.put(owned, {});
         }
@@ -250,19 +334,26 @@ pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []c
                 try json_out.append(allocator, ']');
             }
 
-            // Request body for POST, PUT, PATCH with schema ref
-            if (r.method == .POST or r.method == .PUT or r.method == .PATCH) {
+            const is_default = std.mem.eql(u8, tag, "Default");
+            const schema_ref_name = self.findSchemaName(tag) orelse if (!is_default) tag else null;
+
+            // Request body for POST, PUT, PATCH with schema ref if available
+            if ((r.method == .POST or r.method == .PUT or r.method == .PATCH) and schema_ref_name != null) {
                 try json_out.appendSlice(allocator, ",\"requestBody\":{\"required\":true,\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/");
-                try json_out.appendSlice(allocator, tag);
+                try json_out.appendSlice(allocator, schema_ref_name.?);
                 try json_out.appendSlice(allocator, "\"}}}}");
             }
 
             // Responses: 200/201, 400, 404 with schema ref
-            try json_out.appendSlice(allocator, ",\"responses\":{\"");
-            try json_out.appendSlice(allocator, if (r.method == .POST) "201" else "200");
-            try json_out.appendSlice(allocator, "\":{\"description\":\"Successful Response\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/");
-            try json_out.appendSlice(allocator, tag);
-            try json_out.appendSlice(allocator, "\"}}}},\"400\":{\"description\":\"Bad Request\"},\"404\":{\"description\":\"Not Found\"}}");
+            if (schema_ref_name) |s_name| {
+                try json_out.appendSlice(allocator, ",\"responses\":{\"");
+                try json_out.appendSlice(allocator, if (r.method == .POST) "201" else "200");
+                try json_out.appendSlice(allocator, "\":{\"description\":\"Successful Response\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/");
+                try json_out.appendSlice(allocator, s_name);
+                try json_out.appendSlice(allocator, "\"}}}},\"400\":{\"description\":\"Bad Request\"},\"404\":{\"description\":\"Not Found\"}}");
+            } else {
+                try json_out.appendSlice(allocator, ",\"responses\":{\"200\":{\"description\":\"Successful Response\"}}");
+            }
 
             try json_out.append(allocator, '}'); // close method
         }
@@ -270,21 +361,47 @@ pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []c
         try json_out.append(allocator, '}'); // close path
     }
 
-    // Components & Schemas: Clean, simple schemas for each resource
+    // Components & Schemas: Clean, typed schemas for domain resources
     try json_out.appendSlice(allocator, "},\"components\":{\"schemas\":{");
 
     var first_schema = true;
+
+    // 1. Explicitly registered models/schemas
+    for (self.schemas.items) |s| {
+        if (!first_schema) try json_out.append(allocator, ',');
+        first_schema = false;
+
+        try json_out.append(allocator, '"');
+        try json_out.appendSlice(allocator, s.name);
+        try json_out.appendSlice(allocator, "\":{\"title\":\"");
+        try json_out.appendSlice(allocator, s.name);
+        try json_out.appendSlice(allocator, "\",\"type\":\"object\",\"properties\":");
+        try json_out.appendSlice(allocator, s.properties_json);
+        try json_out.append(allocator, '}');
+    }
+
+    // 2. Fallback for route tags not explicitly registered (excluding "Default")
     var schema_it = unique_tags.keyIterator();
     while (schema_it.next()) |k| {
         const tag = k.*;
+        if (std.mem.eql(u8, tag, "Default")) continue;
+        if (self.findSchemaName(tag) != null) continue;
+
         if (!first_schema) try json_out.append(allocator, ',');
         first_schema = false;
+
+        const default_props = if (std.ascii.eqlIgnoreCase(tag, "products") or std.ascii.eqlIgnoreCase(tag, "product") or std.ascii.eqlIgnoreCase(tag, "items") or std.ascii.eqlIgnoreCase(tag, "item"))
+            "{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"},\"price\":{\"type\":\"number\"}}"
+        else
+            "{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"}}";
 
         try json_out.append(allocator, '"');
         try json_out.appendSlice(allocator, tag);
         try json_out.appendSlice(allocator, "\":{\"title\":\"");
         try json_out.appendSlice(allocator, tag);
-        try json_out.appendSlice(allocator, "\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"}}}");
+        try json_out.appendSlice(allocator, "\",\"type\":\"object\",\"properties\":");
+        try json_out.appendSlice(allocator, default_props);
+        try json_out.append(allocator, '}');
     }
 
     try json_out.appendSlice(allocator, "}}}");

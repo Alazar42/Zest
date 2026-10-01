@@ -81,6 +81,7 @@ pub fn deinit(self: *Self) void {
     self.router.deinit();
     self.middlewares.deinit(self.allocator);
     self.static_routes.deinit(self.allocator);
+    self.openapi_spec.deinit(self.allocator);
     if (self.threaded) |t| {
         t.deinit();
         self.allocator.destroy(t);
@@ -173,6 +174,19 @@ pub fn enableDocsCustom(self: *Self, docs_path: []const u8, openapi_path: []cons
         .version = version,
         .description = description,
     };
+}
+
+/// Registers a model struct type for OpenAPI schema generation.
+/// Inspects struct fields at comptime and registers accurate types (integer, string, number, boolean) under `components.schemas`.
+pub fn registerModel(self: *Self, comptime T: type) !void {
+    const name = openapi.typeBasename(T);
+    const props = comptime openapi.generateModelPropertiesJson(T);
+    try self.openapi_spec.registerSchema(self.allocator, name, props);
+}
+
+/// Registers a custom named schema with raw JSON properties under `components.schemas`.
+pub fn registerSchema(self: *Self, name: []const u8, properties_json: []const u8) !void {
+    try self.openapi_spec.registerSchema(self.allocator, name, properties_json);
 }
 
 /// Alias for `serve()` (Express / Node.js style).

@@ -368,6 +368,42 @@ test "OpenAPI JSON specification generator" {
     try testing.expect(std.mem.indexOf(u8, json_str, "\"components\":{\"schemas\":{\"Items\":") != null);
 }
 
+test "OpenAPI registerModel schema generation" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const DummyProduct = struct {
+        id: u32,
+        name: []const u8,
+        price: f64,
+    };
+
+    var app = init("127.0.0.1", 8080);
+    defer app.deinit();
+
+    try app.registerModel(DummyProduct);
+
+    const handler = struct {
+        fn h(_: *Response) anyerror!void {}
+    }.h;
+    try app.get("/api/v1/products", handler);
+    try app.post("/api/v1/products", handler);
+    try app.get("/api/v1/products/:id", handler);
+    try app.get("/", handler); // Root handler (tag Default, must not produce Default schema)
+
+    const json_str = try app.openapi_spec.generateJson(gpa, app.router.routes.items);
+    defer gpa.free(json_str);
+
+    // Parse to ensure valid JSON
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, json_str, .{});
+    defer parsed.deinit();
+
+    // Verify Product schema is generated with exact types
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"DummyProduct\":{\"title\":\"DummyProduct\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"},\"price\":{\"type\":\"number\"}}}") != null);
+    // Tag "Default" must NOT appear in components.schemas
+    try testing.expect(std.mem.indexOf(u8, json_str, "\"Default\":") == null);
+}
+
 test "App scheme detection (HTTP vs HTTPS)" {
     const testing = std.testing;
 
