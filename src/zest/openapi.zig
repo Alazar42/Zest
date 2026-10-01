@@ -344,13 +344,24 @@ pub fn generateJson(self: *const Self, allocator: std.mem.Allocator, routes: []c
                 try json_out.appendSlice(allocator, "\"}}}}");
             }
 
-            // Responses: 200/201, 400, 404 with schema ref
+            // Responses: 200 (or 201 for POST)
             if (schema_ref_name) |s_name| {
                 try json_out.appendSlice(allocator, ",\"responses\":{\"");
                 try json_out.appendSlice(allocator, if (r.method == .POST) "201" else "200");
-                try json_out.appendSlice(allocator, "\":{\"description\":\"Successful Response\",\"content\":{\"application/json\":{\"schema\":{\"$ref\":\"#/components/schemas/");
-                try json_out.appendSlice(allocator, s_name);
-                try json_out.appendSlice(allocator, "\"}}}},\"400\":{\"description\":\"Bad Request\"},\"404\":{\"description\":\"Not Found\"}}");
+                try json_out.appendSlice(allocator, "\":{\"description\":\"Successful Response\",\"content\":{\"application/json\":{\"schema\":");
+
+                // If GET on collection (no path parameters), response is an array of items
+                if (r.method == .GET and param_count == 0) {
+                    try json_out.appendSlice(allocator, "{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/");
+                    try json_out.appendSlice(allocator, s_name);
+                    try json_out.appendSlice(allocator, "\"}}");
+                } else {
+                    try json_out.appendSlice(allocator, "{\"$ref\":\"#/components/schemas/");
+                    try json_out.appendSlice(allocator, s_name);
+                    try json_out.appendSlice(allocator, "\"}");
+                }
+
+                try json_out.appendSlice(allocator, "}}}}");
             } else {
                 try json_out.appendSlice(allocator, ",\"responses\":{\"200\":{\"description\":\"Successful Response\"}}");
             }
