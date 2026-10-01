@@ -5,8 +5,12 @@ pub const sqlite = struct {
     pub const OK: c_int = 0;
     pub const ROW: c_int = 100;
     pub const DONE: c_int = 101;
+    pub const OPEN_READONLY: c_int = 0x00000001;
+    pub const OPEN_READWRITE: c_int = 0x00000002;
+    pub const OPEN_CREATE: c_int = 0x00000004;
 
     pub extern "c" fn sqlite3_open(filename: [*:0]const u8, ppDb: *?*anyopaque) c_int;
+    pub extern "c" fn sqlite3_open_v2(filename: [*:0]const u8, ppDb: *?*anyopaque, flags: c_int, zVfs: ?[*:0]const u8) c_int;
     pub extern "c" fn sqlite3_close(pDb: ?*anyopaque) c_int;
     pub extern "c" fn sqlite3_exec(
         pDb: ?*anyopaque,
@@ -154,7 +158,8 @@ pub fn initSqlite(allocator: std.mem.Allocator, file_path: []const u8) !Self {
     defer allocator.free(path_z);
 
     var db_handle: ?*anyopaque = null;
-    const rc = sqlite.sqlite3_open(path_z, &db_handle);
+    const flags = sqlite.OPEN_READWRITE | sqlite.OPEN_CREATE;
+    const rc = sqlite.sqlite3_open_v2(path_z, &db_handle, flags, null);
     if (rc != sqlite.OK) {
         if (db_handle) |h| {
             std.log.err("SQLite open failed: {s}", .{sqlite.sqlite3_errmsg(h)});
@@ -162,6 +167,13 @@ pub fn initSqlite(allocator: std.mem.Allocator, file_path: []const u8) !Self {
         }
         return error.SqliteOpenFailed;
     }
+
+    // Configure connection for high-concurrency and resilience:
+    // - WAL journal mode allows concurrent readers and writers without locking the file
+    // - busy_timeout waits up to 5000ms before returning busy errors
+    _ = sqlite.sqlite3_exec(db_handle, "PRAGMA journal_mode = WAL;", null, null, null);
+    _ = sqlite.sqlite3_exec(db_handle, "PRAGMA synchronous = NORMAL;", null, null, null);
+    _ = sqlite.sqlite3_exec(db_handle, "PRAGMA busy_timeout = 5000;", null, null, null);
 
     std.log.info("[Zest] Connected to SQLite database file: '{s}'", .{file_path});
 
