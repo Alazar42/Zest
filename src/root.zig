@@ -350,6 +350,10 @@ test "OpenAPI JSON specification generator" {
     const json_str = try spec.generateJson(gpa, &routes);
     defer gpa.free(json_str);
 
+    // Verify entire JSON parses without any syntax or brace errors
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, json_str, .{});
+    defer parsed.deinit();
+
     try testing.expect(std.mem.indexOf(u8, json_str, "\"openapi\":\"3.0.0\"") != null);
     try testing.expect(std.mem.indexOf(u8, json_str, "/items/{id}") != null);
     try testing.expect(std.mem.indexOf(u8, json_str, "\"name\":\"id\"") != null);
