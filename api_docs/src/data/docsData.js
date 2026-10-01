@@ -391,7 +391,7 @@ Review the complete working files below. You can copy this structure directly in
         code: `const zest = @import("zest");
 
 pub const Product = struct {
-    id: u32,
+    id: ?[]const u8 = null,
     name: []const u8,
     price: f64,
 
@@ -441,14 +441,13 @@ pub fn getAll(req: *zest.Request, res: *zest.Response) !void {
         for (products) |*p| p.deinit();
         req.allocator.free(products);
     }
-    // res.jsonValue automatically serializes Parsed model slices cleanly
     try res.jsonValue(products);
 }
 
-/// GET /api/v1/products/:id - Fetch single product by ID
+/// GET /api/v1/products/:id - Fetch single product by UUID
 pub fn getById(req: *zest.Request, res: *zest.Response) !void {
-    const id = req.paramInt("id", u32) orelse {
-        try res.status(.bad_request, "{\\"error\\": \\"Invalid product ID\\"}");
+    const id = req.param("id") orelse {
+        try res.status(.bad_request, "{\\"error\\": \\"Missing product ID\\"}");
         return;
     };
 
@@ -461,19 +460,25 @@ pub fn getById(req: *zest.Request, res: *zest.Response) !void {
     }
 }
 
-/// POST /api/v1/products - Creates product with automatic HTTP 422 validation
+/// POST /api/v1/products - Creates product with auto-generated UUID v4 if not provided
 pub fn create(req: *zest.Request, res: *zest.Response) !void {
     var parsed = (try req.validateJson(Product, res)) orelse return;
     defer parsed.deinit();
 
-    try Product.model.save(&database.db, req.allocator, &parsed.value);
-    try res.status(.created, "{\\"status\\":\\"created\\"}");
+    var product = parsed.value;
+    if (product.id == null or product.id.?.len == 0) {
+        product.id = try zest.zuuid.new(req.allocator);
+    }
+
+    try Product.model.save(&database.db, req.allocator, &product);
+    const body = try std.fmt.allocPrint(req.allocator, "{{\\"status\\":\\"created\\",\\"id\\":\\"{s}\\"}}", .{product.id.?});
+    try res.status(.created, body);
 }
 
-/// DELETE /api/v1/products/:id - Delete product by ID
+/// DELETE /api/v1/products/:id - Delete product by UUID
 pub fn deleteProduct(req: *zest.Request, res: *zest.Response) !void {
-    const id = req.paramInt("id", u32) orelse {
-        try res.status(.bad_request, "{\\"error\\": \\"Invalid product ID\\"}");
+    const id = req.param("id") orelse {
+        try res.status(.bad_request, "{\\"error\\": \\"Missing product ID\\"}");
         return;
     };
 
@@ -523,9 +528,12 @@ pub fn main() !void {
     const db_url = zest.zenv.getOr("DATABASE_URL", "sqlite:products.db");
     const port = zest.zenv.getInt("PORT", u16) orelse 8000;
 
-    // 2. Initialize Database (SQLite, PostgreSQL, or MongoDB)
+    // 2. Initialize Database and seed sample products
     try database.init(gpa, db_url);
     defer database.deinit();
+
+    try Product.model.save(&database.db, gpa, &.{ .id = &zest.zuuid.generate(), .name = "Apple iPhone", .price = 999.99 });
+    try Product.model.save(&database.db, gpa, &.{ .id = &zest.zuuid.generate(), .name = "MacBook Pro", .price = 1999.99 });
 
     // 3. Initialize Zest Application
     var app = zest.init("127.0.0.1", port);
@@ -557,7 +565,7 @@ const zest = @import("zest");
 
 // For quick scripts or microservices, all components can live in one file:
 const Product = struct {
-    id: u32,
+    id: ?[]const u8 = null,
     name: []const u8,
     price: f64,
 
@@ -588,8 +596,14 @@ fn createProduct(req: *zest.Request, res: *zest.Response) !void {
     var parsed = (try req.validateJson(Product, res)) orelse return;
     defer parsed.deinit();
 
-    try Product.model.save(&db, req.allocator, &parsed.value);
-    try res.status(.created, "{\\"status\\":\\"created\\"}");
+    var product = parsed.value;
+    if (product.id == null or product.id.?.len == 0) {
+        product.id = try zest.zuuid.new(req.allocator);
+    }
+
+    try Product.model.save(&db, req.allocator, &product);
+    const body = try std.fmt.allocPrint(req.allocator, "{{\"status\":\"created\",\"id\":\"{s}\"}}", .{product.id.?});
+    try res.status(.created, body);
 }
 
 pub fn main() !void {
@@ -601,12 +615,16 @@ pub fn main() !void {
     db = try zest.Db.connect(gpa, zest.zenv.getOr("DATABASE_URL", "sqlite:products.db"));
     defer db.deinit();
 
+    try Product.model.save(&db, gpa, &.{ .id = &zest.zuuid.generate(), .name = "Apple iPhone", .price = 999.99 });
+    try Product.model.save(&db, gpa, &.{ .id = &zest.zuuid.generate(), .name = "MacBook Pro", .price = 1999.99 });
+
     var app = zest.init("127.0.0.1", zest.zenv.getInt("PORT", u16) orelse 8000);
     defer app.deinit();
 
     try app.use(zest.middleware.logger);
     try app.use(zest.middleware.cors(.{}));
     app.enableDocs();
+    try app.registerModel(Product);
 
     try app.get("/products", listProducts);
     try app.post("/products", createProduct);
