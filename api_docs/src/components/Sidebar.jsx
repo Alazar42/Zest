@@ -1,7 +1,7 @@
 import React from 'react';
 import { DOCS_SECTIONS } from '../data/docsData';
 import { Box, Flex, Text, Button, ScrollArea } from '@radix-ui/themes';
-import { BookOpen, Globe, Database, Layers, Sparkles } from 'lucide-react';
+import { BookOpen, Globe, Database, Layers, Sparkles, Server, Shield } from 'lucide-react';
 
 const CATEGORY_ICONS = {
   'getting-started': BookOpen,
@@ -9,6 +9,7 @@ const CATEGORY_ICONS = {
   'database-engine': Database,
   'orm-models': Layers,
   'advanced-features': Sparkles,
+  'production-deployment': Server,
 };
 
 export default function Sidebar({ activeSection, onSelectSection }) {

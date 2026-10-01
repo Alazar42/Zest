@@ -101,6 +101,41 @@ In your `build.zig` file, you only need to add two lines:
 
 ---
 
+### 3. Updating Zest in an Existing Project
+
+Because Zig uses immutable cryptographic package hashes in `build.zig.zon`, your dependencies will never change unexpectedly. When you want to upgrade or switch versions:
+
+#### Upgrading to the Latest Commit (Recommended)
+```bash
+zig fetch --save git+https://github.com/Alazar42/Zest.git
+```
+This updates `.hash` and `.url` in `build.zig.zon` to the latest remote HEAD commit.
+
+#### Pinning a Specific Branch, Tag, or Commit
+```bash
+# Pin to main branch
+zig fetch --save git+https://github.com/Alazar42/Zest.git#main
+
+# Pin to a specific release tag
+zig fetch --save git+https://github.com/Alazar42/Zest.git#v0.1.0
+
+# Pin to an exact commit SHA
+zig fetch --save git+https://github.com/Alazar42/Zest.git#<commit_sha>
+```
+
+#### Local Development Workflow (`.path`)
+If you are developing Zest locally alongside your application, switch from `.url` to `.path` in `build.zig.zon`:
+```zig
+.dependencies = .{
+    .zest = .{
+        .path = "../Zest", // relative path to local clone
+    },
+},
+```
+Local edits to Zest are recompiled immediately on every `zig build run` without git commits!
+
+---
+
 ## Architecture & Project Structure
 
 While Zest supports single-file applications for quick scripts, production web services scale best with a clean separation of concerns:

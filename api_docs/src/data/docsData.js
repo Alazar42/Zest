@@ -7,17 +7,22 @@ export const DOCS_SECTIONS = [
       { id: 'prerequisites', title: 'Prerequisites' },
       { id: 'installation', title: 'Installation & zig init' },
       { id: 'build-zig', title: 'Configuring build.zig' },
+      { id: 'updating-zest', title: 'Updating Zest' },
       { id: 'quickstart', title: 'Quickstart & Architecture' }
     ]
   },
   {
     id: 'routing-http',
-    title: 'Routing & HTTP',
+    title: 'HTTP & Routing Guide',
     items: [
       { id: 'router', title: 'Router & Route Handlers' },
-      { id: 'path-params', title: 'Dynamic Path Parameters' },
+      { id: 'path-params', title: 'Path Parameters' },
+      { id: 'query-params', title: 'Query Parameters & Filters' },
       { id: 'sub-routers', title: 'Sub-Router Route Groups' },
       { id: 'request-response', title: 'Request & Response API' },
+      { id: 'response-status', title: 'Response Status & Formatting' },
+      { id: 'error-handling', title: 'Error Handling & HTTP Exceptions' },
+      { id: 'headers-cookies', title: 'Headers & Cookies' },
       { id: 'middleware', title: 'Middlewares & Logging' }
     ]
   },
@@ -50,7 +55,16 @@ export const DOCS_SECTIONS = [
       { id: 'multipart-uploads', title: 'Multipart Form Data & Uploads' },
       { id: 'openapi-swagger', title: 'Swagger UI & OpenAPI 3.0' },
       { id: 'zenv-loader', title: 'Environment Loader (zenv)' },
-      { id: 'jwt-security', title: 'JWT Authentication & Cookies' }
+      { id: 'jwt-security', title: 'JWT Authentication & Cookies' },
+      { id: 'auth-middleware', title: 'Route Guards & Role-Based Auth' }
+    ]
+  },
+  {
+    id: 'production-deployment',
+    title: 'Testing & Production',
+    items: [
+      { id: 'testing-guide', title: 'Testing Guide & Test Cases' },
+      { id: 'deployment-docker', title: 'Production & Docker Guide' }
     ]
   }
 ];
@@ -235,6 +249,104 @@ exe.root_module.addImport("zest", zest_dep.module("zest"));
  
      b.installArtifact(exe);
  }`
+      }
+    ]
+  },
+
+  'updating-zest': {
+    title: 'Updating Zest in an Existing Project',
+    subtitle: 'How to upgrade, pin specific versions, and switch between git and local development.',
+    content: `
+When you add Zest to your project via \`zig fetch --save\`, Zig locks the exact commit SHA and computed content hash inside your \`build.zig.zon\` manifest.
+
+Because Zig uses immutable package content hashes, running \`zig build\` will **never** automatically pull remote changes unexpectedly. When you want to update Zest to a newer version or bugfix release, use one of the methods below.
+
+---
+
+### Method 1: Upgrading to the Latest Commit (Recommended)
+
+To pull the latest commit from the main repository and update your \`build.zig.zon\` hash:
+
+\`\`\`bash
+zig fetch --save git+https://github.com/Alazar42/Zest.git
+\`\`\`
+
+Zig will contact GitHub, fetch the newest HEAD commit, compute its new cryptographic fingerprint, and rewrite the \`.hash\` and \`.url\` fields in \`build.zig.zon\` automatically.
+
+---
+
+### Method 2: Pinning a Specific Branch, Tag, or Commit
+
+You can append a fragment identifier (\`#<ref>\`) to the URL to pin an exact git reference:
+
+#### Update to the \`main\` branch explicitly:
+\`\`\`bash
+zig fetch --save git+https://github.com/Alazar42/Zest.git#main
+\`\`\`
+
+#### Pin to a specific release tag:
+\`\`\`bash
+zig fetch --save git+https://github.com/Alazar42/Zest.git#v0.1.0
+\`\`\`
+
+#### Pin to an exact Git commit SHA:
+\`\`\`bash
+zig fetch --save git+https://github.com/Alazar42/Zest.git#1b4c8e0ce752a7c7bd2beb61a473255cb56faf29
+\`\`\`
+
+---
+
+### Method 3: Forcing Cache Invalidation
+
+If your development machine cached an older package version, or you need to ensure all dependencies are clean:
+
+\`\`\`bash
+# 1. Force Zig to re-fetch all declared dependencies
+zig build --fetch
+
+# 2. Clear local build cache if required
+rm -rf .zig-cache
+\`\`\`
+
+---
+
+### Method 4: Local Framework Development Workflow (\`.path\`)
+
+If you are developing Zest itself, writing custom extensions, or debugging framework internals alongside your application, you do **not** need to push git commits to test changes.
+
+Simply switch your dependency in \`build.zig.zon\` from a \`.url\` to a relative \`.path\`:
+
+\`\`\`zig
+// build.zig.zon
+.{
+    .name = .my_app,
+    .version = "0.1.0",
+    .fingerprint = 0xe5383c71202cbc31,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zest = .{
+            // Point directly to your local clone of Zest:
+            .path = "../Zest",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}
+\`\`\`
+
+With \`.path\`, any changes made to the Zest source code are compiled **instantly** on your next \`zig build run\` with zero fetch latency!
+    `,
+    codeExamples: [
+      {
+        title: 'Updating Dependencies Command Cheatsheet',
+        language: 'bash',
+        code: `# Upgrade Zest to latest commit
+zig fetch --save git+https://github.com/Alazar42/Zest.git
+
+# Rebuild your application with the new version
+zig build run
+
+# Verify compilation and run all tests
+zig build test`
       }
     ]
   },
@@ -561,6 +673,76 @@ Routes with segments starting with \`:\` define dynamic parameters (e.g. \`/user
     ]
   },
 
+  'query-params': {
+    title: 'Query Parameters & Filtering',
+    subtitle: 'Extract optional, default, and typed query parameters like FastAPI.',
+    content: `
+Query parameters are key-value pairs appended to the URL after a \`?\` mark (for example, \`/items?limit=20&search=keyboard&min_price=10.50\`).
+
+In Zest, query parameters are easily extracted from \`req\` with zero boilerplate:
+
+### Core API Methods
+- \`req.queryParam("key")\`: Returns \`?[]const u8\` (or \`null\` if omitted from the URL).
+- **Providing defaults**: Combine with Zig's \`orelse\` expression:
+  \`\`\`zig
+  const search = req.queryParam("search") orelse "";
+  \`\`\`
+- **Parsing integers with fallbacks**:
+  \`\`\`zig
+  const limit = if (req.queryParam("limit")) |l| (std.fmt.parseInt(usize, l, 10) catch 20) else 20;
+  const page = if (req.queryParam("page")) |p| (std.fmt.parseInt(usize, p, 10) catch 1) else 1;
+  \`\`\`
+- **Parsing boolean flags**:
+  \`\`\`zig
+  const show_archived = if (req.queryParam("archived")) |val|
+      std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "1")
+  else
+      false;
+  \`\`\`
+    `,
+    codeExamples: [
+      {
+        title: 'Complete Search & Paginated Filter Handler',
+        language: 'zig',
+        code: `fn listProducts(req: *zest.Request, res: *zest.Response) !void {
+    // 1. Extract query params with fallbacks
+    const limit = if (req.queryParam("limit")) |l|
+        (std.fmt.parseInt(usize, l, 10) catch 25)
+    else
+        25;
+
+    const offset = if (req.queryParam("offset")) |o|
+        (std.fmt.parseInt(usize, o, 10) catch 0)
+    else
+        0;
+
+    // 2. Build fluent filtered query
+    var q = Product.model.query(&database.db, req.allocator)
+        .limit(limit)
+        .offset(offset);
+
+    if (req.queryParam("search")) |s| {
+        _ = q.where("name", .contains, s);
+    }
+
+    if (req.queryParam("min_price")) |mp| {
+        if (std.fmt.parseFloat(f64, mp) catch null) |_| {
+            _ = q.where("price", .gte, mp);
+        }
+    }
+
+    // 3. Execute and stream JSON results
+    const results = try q.exec();
+    defer {
+        for (results) |*r| r.deinit();
+        req.allocator.free(results);
+    }
+    try res.jsonValue(results);
+}`
+      }
+    ]
+  },
+
   'sub-routers': {
     title: 'Sub-Router Route Groups',
     subtitle: 'Organize modular endpoints and API versioning with app.group.',
@@ -606,6 +788,162 @@ try auth_group.post("/register", registerHandler);`
 - \`res.setCookie(name, val, opts)\`: Issue HTTP cookies.
     `,
     codeExamples: []
+  },
+
+  'response-status': {
+    title: 'Response Status & Formatting',
+    subtitle: 'Send custom status codes, structured JSON, HTML, and redirects.',
+    content: `
+Zest response objects (\`*zest.Response\`) provide high-level methods for formatting any HTTP response cleanly.
+
+### Standard HTTP Status Codes
+Zest leverages Zig's native \`std.http.Status\` enum for compile-time validated status codes:
+- \`.ok\` (200)
+- \`.created\` (201)
+- \`.accepted\` (202)
+- \`.no_content\` (204)
+- \`.bad_request\` (400)
+- \`.unauthorized\` (401)
+- \`.forbidden\` (403)
+- \`.not_found\` (404)
+- \`.conflict\` (409)
+- \`.unprocessable_entity\` (422)
+- \`.internal_server_error\` (500)
+
+### Primary Response Helpers
+- \`res.jsonValue(val)\`: Automatically serializes any Zig struct, array, slice, Model instance, or \`std.json.Parsed(T)\` into an HTTP 200 JSON response.
+- \`res.json(raw_json_string)\`: Responds with raw JSON string and \`application/json\` header.
+- \`res.status(status, body)\`: Sets custom status code and content.
+- \`res.text(plain_text)\`: Responds with \`text/plain\`.
+- \`res.html("<h1>Hello</h1>")\`: Responds with \`text/html\`.
+- \`res.redirect("/login")\`: Sends HTTP 302 Found redirect with \`Location\` header.
+    `,
+    codeExamples: [
+      {
+        title: 'Response Status Examples',
+        language: 'zig',
+        code: `// 201 Created with JSON
+try res.status(.created, "{\\"status\\":\\"created\\",\\"id\\":101}");
+
+// 204 No Content
+try res.send("", .{ .status = .no_content });
+
+// HTML rendering
+try res.html("<!DOCTYPE html><html><body><h1>Welcome to Zest!</h1></body></html>");
+
+// HTTP 302 Redirect
+try res.redirect("/dashboard");`
+      }
+    ]
+  },
+
+  'error-handling': {
+    title: 'Error Handling & HTTP Exceptions',
+    subtitle: 'Standardized error responses, validation errors, and custom exception patterns.',
+    content: `
+Consistent, structured error payloads make frontends and API clients dramatically easier to build and debug.
+
+### Standardized Error Format
+Like FastAPI, Zest recommends returning error payloads with a clear top-level structure:
+
+\`\`\`json
+{
+  "error": "Resource not found",
+  "status": 404
+}
+\`\`\`
+
+Or for validation errors, an array of faulty fields:
+\`\`\`json
+{
+  "detail": [
+    { "field": "email", "message": "Field 'email' must be a valid email address" }
+  ]
+}
+\`\`\`
+
+### Writing Reusable Error Helpers
+You can define helper functions in your project for clean, expressive error returns without repeated string allocation:
+    `,
+    codeExamples: [
+      {
+        title: 'Clean Error Response Helpers',
+        language: 'zig',
+        code: `pub fn sendError(res: *zest.Response, status: std.http.Status, message: []const u8) !void {
+    var buf: [256]u8 = undefined;
+    const body = try std.fmt.bufPrint(&buf, "{{\"error\":\"{s}\",\"status\":{d}}}", .{
+        message,
+        @intFromEnum(status),
+    });
+    try res.status(status, body);
+}
+
+// In your controller:
+pub fn getOrder(req: *zest.Request, res: *zest.Response) !void {
+    const order_id = req.paramInt("id", u32) orelse {
+        return sendError(res, .bad_request, "Invalid order ID");
+    };
+
+    var found = try Order.model.find(&database.db, req.allocator, order_id);
+    if (found) |*ord| {
+        defer ord.deinit();
+        try res.jsonValue(ord.value);
+    } else {
+        return sendError(res, .not_found, "Order not found");
+    }
+}`
+      }
+    ]
+  },
+
+  'headers-cookies': {
+    title: 'Headers & HTTP Cookies',
+    subtitle: 'Inspect incoming headers, set custom headers, and manage secure HTTP cookies.',
+    content: `
+Zest provides first-class support for inspecting request headers and issuing secure, encrypted HTTP cookies.
+
+### 1. Reading Request Headers
+Look up any HTTP request header with case-insensitive matching:
+\`\`\`zig
+const auth_header = req.header("authorization");
+const user_agent = req.header("user-agent") orelse "unknown";
+const api_key = req.header("x-api-key");
+\`\`\`
+
+### 2. Setting Response Headers
+Add custom headers to the outgoing response:
+\`\`\`zig
+try res.setHeader("X-Server", "Zest");
+try res.setHeader("Cache-Control", "no-store, max-age=0");
+\`\`\`
+
+### 3. Managing HTTP Cookies (\`zest.Cookie\`)
+Issue modern, security-hardened cookies with attributes like \`HttpOnly\`, \`Secure\`, \`SameSite\`, and expiration:
+    `,
+    codeExamples: [
+      {
+        title: 'Issuing and Clearing Cookies',
+        language: 'zig',
+        code: `// Setting a secure session cookie
+try res.setCookie(.{
+    .name = "session_token",
+    .value = "xyz_jwt_token_secret_123",
+    .path = "/",
+    .http_only = true,      // Prevents JavaScript XSS access
+    .secure = true,         // Enforces HTTPS transmission
+    .same_site = .strict,   // Mitigates CSRF attacks
+    .max_age = 86400,       // 24 hours
+});
+
+// Clearing a cookie on logout:
+try res.setCookie(.{
+    .name = "session_token",
+    .value = "",
+    .path = "/",
+    .max_age = 0,           // Expires immediately
+});`
+      }
+    ]
   },
 
   'middleware': {
@@ -976,5 +1314,193 @@ if (payload) |json_claims| {
 \`\`\`
     `,
     codeExamples: []
+  },
+
+  'auth-middleware': {
+    title: 'Route Guards & Role-Based Auth',
+    subtitle: 'Protect endpoints and sub-router groups with JWT verification.',
+    content: `
+Secure your API by combining Zest's high-speed HS256 JWT cryptography with custom route guard handlers.
+
+### Authentication Flow
+1. Client sends token in the \`Authorization: Bearer <token>\` header.
+2. The route handler or guard extracts the token slice.
+3. \`zest.jwt.verify\` validates the cryptographic signature and token expiry.
+4. If valid, the handler unpacks user claims (e.g. user ID and role).
+5. If invalid or missing, respond with **HTTP 401 Unauthorized**.
+    `,
+    codeExamples: [
+      {
+        title: 'Protected Controller Handler',
+        language: 'zig',
+        code: `const JWT_SECRET = "super_secure_production_secret_key_123";
+
+fn authenticateUser(req: *zest.Request, res: *zest.Response) !?[]const u8 {
+    const auth_header = req.header("authorization") orelse {
+        try res.status(.unauthorized, "{\\"error\\": \\"Missing Authorization header\\"}");
+        return null;
+    };
+
+    if (!std.mem.startsWith(u8, auth_header, "Bearer ")) {
+        try res.status(.unauthorized, "{\\"error\\": \\"Invalid bearer token format\\"}");
+        return null;
+    };
+
+    const token = auth_header["Bearer ".len..];
+    const claims_json = zest.jwt.verify(req.allocator, token, JWT_SECRET) catch {
+        try res.status(.unauthorized, "{\\"error\\": \\"Invalid or expired token\\"}");
+        return null;
+    };
+
+    return claims_json;
+}
+
+// Protected route handler:
+pub fn getProfile(req: *zest.Request, res: *zest.Response) !void {
+    const claims = (try authenticateUser(req, res)) orelse return;
+    defer req.allocator.free(claims);
+
+    try res.json(claims);
+}`
+      }
+    ]
+  },
+
+  'testing-guide': {
+    title: 'Testing Guide & Test Cases',
+    subtitle: 'Write robust unit and integration tests using Zig standard testing.',
+    content: `
+Because Zest is built with pure Zig and zero global state, testing models, validation, and route matching is fast, reliable, and runs entirely in parallel with \`zig build test\`.
+
+### Testing Checklist
+1. **Model Validation**: Ensure valid structs pass and invalid values trigger appropriate errors.
+2. **Database Queries**: Test inserting and finding records with in-memory or temporary SQLite files.
+3. **Route Matching**: Test path parameters and dynamic segment extraction.
+    `,
+    codeExamples: [
+      {
+        title: 'src/tests.zig (Example Test Suite)',
+        language: 'zig',
+        code: `const std = @import("std");
+const testing = std.testing;
+const zest = @import("zest");
+const Product = @import("models/product.zig").Product;
+
+test "Product validation rejects invalid prices" {
+    var errs = zest.ValidationErrors.init(testing.allocator);
+    defer errs.deinit();
+
+    const bad_product = Product{
+        .id = 1,
+        .name = "A", // too short (min length 3)
+        .price = -5.0, // invalid price
+    };
+
+    bad_product.validate(&errs);
+    try testing.expect(errs.hasErrors());
+    try testing.expectEqual(@as(usize, 2), errs.errors.items.len);
+}
+
+test "SQLite persistence and retrieval" {
+    var db = try zest.Db.connect(testing.allocator, "sqlite:test_tmp.db");
+    defer {
+        db.deinit();
+        _ = std.os.linux.unlink("test_tmp.db");
+    }
+
+    const item = Product{ .id = 42, .name = "Wireless Keyboard", .price = 69.99 };
+    try Product.model.save(&db, testing.allocator, &item);
+
+    var found = try Product.model.find(&db, testing.allocator, 42);
+    try testing.expect(found != null);
+    defer found.?.deinit();
+
+    try testing.expectEqualStrings("Wireless Keyboard", found.?.value.name);
+    try testing.expectEqual(@as(f64, 69.99), found.?.value.price);
+}`
+      }
+    ]
+  },
+
+  'deployment-docker': {
+    title: 'Production Deployment & Docker',
+    subtitle: 'Optimized binary compilation, containerization, and reverse proxy setup.',
+    content: `
+Deploying a Zest application delivers exceptional throughput with minimal memory footprint (typically < 15MB RAM under heavy load).
+
+---
+
+### 1. Compiling for Production
+Build a native stripped release binary using Zig's optimization flags:
+
+\`\`\`bash
+# ReleaseSafe: full optimizations with safety panics on undefined behavior
+zig build -Doptimize=ReleaseSafe
+
+# ReleaseFast: maximum optimization without runtime safety checks
+zig build -Doptimize=ReleaseFast
+\`\`\`
+
+The compiled binary will be placed in \`zig-out/bin/\`.
+
+---
+
+### 2. Multi-Stage Dockerfile
+Use this lightweight Dockerfile to compile and run your service inside an Alpine or Debian container:
+
+\`\`\`dockerfile
+# Stage 1: Build binary with Zig
+FROM alpine:3.20 AS builder
+RUN apk add --no-cache zig gcc musl-dev sqlite-dev postgresql-dev
+
+WORKDIR /app
+COPY . .
+RUN zig build -Doptimize=ReleaseSafe
+
+# Stage 2: Minimal runtime image
+FROM alpine:3.20
+RUN apk add --no-cache libsqlite3 libpq ca-certificates
+
+WORKDIR /app
+COPY --from=builder /app/zig-out/bin/* /app/server
+COPY .env* ./
+
+EXPOSE 8000
+CMD ["/app/server"]
+\`\`\`
+
+---
+
+### 3. Production Reverse Proxy (Caddy / Nginx)
+Run Zest behind Caddy or Nginx for automated HTTPS certificates:
+
+#### Caddyfile Example:
+\`\`\`caddyfile
+api.example.com {
+    reverse_proxy 127.0.0.1:8000
+}
+\`\`\`
+    `,
+    codeExamples: [
+      {
+        title: 'Systemd Service Unit (/etc/systemd/system/zest.service)',
+        language: 'ini',
+        code: `[Unit]
+Description=Zest Production API
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/my-zest-api
+ExecStart=/var/www/my-zest-api/zig-out/bin/my-zest-api
+Restart=always
+RestartSec=3
+Environment=PORT=8000 DATABASE_URL=sqlite:production.db
+
+[Install]
+WantedBy=multi-user.target`
+      }
+    ]
   }
 };
