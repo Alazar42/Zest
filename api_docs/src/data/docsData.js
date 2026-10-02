@@ -1798,58 +1798,75 @@ api.example.com {
       {
         title: 'Dockerfile.vercel (Production Multi-Stage for Vercel)',
         language: 'dockerfile',
-        code: `# ====================================================================
-# Dockerfile.vercel: Production Container Build for Vercel Deployment
-# ====================================================================
+        code: `# ==============================================================================
+# Vercel Container Deployment (Dockerfile.vercel)
+# Multi-stage build for native Zig 0.16.0 backend
+# ==============================================================================
+FROM debian:bookworm-slim AS builder
 
-# Stage 1: Build binary with Zig & system dependencies
-FROM alpine:3.20 AS builder
+WORKDIR /build
 
-RUN apk add --no-cache \\
-    zig \\
-    gcc \\
-    musl-dev \\
-    sqlite-dev \\
-    postgresql-dev \\
-    git \\
-    ca-certificates
-
-WORKDIR /app
-
-# Cache package dependencies by copying build configs first
-COPY build.zig build.zig.zon ./
-RUN zig build --help > /dev/null 2>&1 || true
-
-# Copy source tree and compile optimized release binary
-COPY . .
-RUN zig build -Doptimize=ReleaseSafe
-
-# Stage 2: Minimal, secure runtime container
-FROM alpine:3.20 AS runner
-
-RUN apk add --no-cache \\
-    libsqlite3 \\
-    libpq \\
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    curl \\
     ca-certificates \\
-    tzdata
+    xz-utils \\
+    tar \\
+    git \\
+    build-essential \\
+    libpq-dev \\
+    libsqlite3-dev \\
+    && rm -rf /var/lib/apt/lists/*
+
+# Install official Zig 0.16.0 compiler (multi-arch: amd64 / arm64)
+ARG TARGETARCH
+RUN set -eux; \\
+    case "\${TARGETARCH:-amd64}" in \\
+        amd64|x86_64) ZIG_ARCH="x86_64" ;; \\
+        arm64|aarch64) ZIG_ARCH="aarch64" ;; \\
+        *) ZIG_ARCH="x86_64" ;; \\
+    esac; \\
+    curl -sSL "https://ziglang.org/download/0.16.0/zig-\${ZIG_ARCH}-linux-0.16.0.tar.xz" -o /tmp/zig.tar.xz; \\
+    mkdir -p /opt/zig; \\
+    tar -xf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \\
+    ln -s /opt/zig/zig /usr/local/bin/zig; \\
+    rm -f /tmp/zig.tar.xz
+
+# Copy project manifests and source
+COPY build.zig build.zig.zon ./
+COPY src/ src/
+
+# Build optimized native binary
+RUN zig build -Doptimize=ReleaseFast
+
+# ==============================================================================
+# Runtime Stage: Minimal production runner
+# ==============================================================================
+FROM debian:bookworm-slim AS runner
 
 WORKDIR /app
 
-# Copy compiled binary from builder stage
-COPY --from=builder /app/zig-out/bin/* /app/server
+# Install runtime dynamic dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    ca-certificates \\
+    libpq5 \\
+    libsqlite3-0 \\
+    curl \\
+    && rm -rf /var/lib/apt/lists/* \\
+    && useradd -m -u 1001 -s /bin/bash appuser
 
-# Create unprivileged service user
-RUN adduser -D -u 10001 appuser && \\
-    chown -R appuser:appuser /app
+# Copy executable from builder (rename to match your binary or use wildcard)
+COPY --from=builder /build/zig-out/bin/* /usr/local/bin/server
+
+RUN chmod +x /usr/local/bin/server && \\
+    chown appuser:appuser /usr/local/bin/server
 
 USER appuser
 
-# Vercel assigns PORT (default 3000) and routes incoming traffic
+# Vercel provides the PORT environment variable at runtime
 ENV HOST=0.0.0.0
-ENV PORT=3000
-EXPOSE 3000
 
-CMD ["/app/server"]`
+ENTRYPOINT ["/usr/local/bin/server"]`
       },
       {
         title: 'vercel.json (Vercel Project Routing & Configuration)',
