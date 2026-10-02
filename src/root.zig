@@ -881,3 +881,136 @@ test "time module formatting and parsing" {
     try testing.expectEqual(dt.minute, parsed.minute);
     try testing.expectEqual(dt.second, parsed.second);
 }
+
+test "Relational Model schema and column mapping in SQLite" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const test_db = "relational_orm_test.db";
+    _ = std.os.linux.unlink(test_db);
+    defer _ = std.os.linux.unlink(test_db);
+
+    var db = try Db.connect(gpa, "sqlite:relational_orm_test.db");
+    defer db.deinit();
+
+    const ProjectModel = struct {
+        id: []const u8,
+        name: []const u8,
+        slug: []const u8,
+        views: u64,
+        featured: bool,
+
+        pub const model = Model(@This());
+    };
+
+    // 1. Save records
+    const p1 = ProjectModel{
+        .id = "proj_aimlite",
+        .name = "AIMLite",
+        .slug = "aimlite",
+        .views = 150,
+        .featured = true,
+    };
+    try ProjectModel.model.save(&db, gpa, &p1);
+
+    const p2 = ProjectModel{
+        .id = "proj_drawviz",
+        .name = "DrawViz",
+        .slug = "drawviz",
+        .views = 75,
+        .featured = false,
+    };
+    try ProjectModel.model.save(&db, gpa, &p2);
+
+    // 2. Verify physical schema in SQLite: columns must be id, name, slug, views, featured (NO data column)
+    {
+        var stmt: ?*anyopaque = null;
+        const rc = Db.sqlite.sqlite3_prepare_v2(db.handle, "PRAGMA table_info(ProjectModel);", -1, &stmt, null);
+        try testing.expectEqual(Db.sqlite.OK, rc);
+        defer _ = Db.sqlite.sqlite3_finalize(stmt);
+
+        var col_names: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (col_names.items) |c| gpa.free(c);
+            col_names.deinit(gpa);
+        }
+
+        while (Db.sqlite.sqlite3_step(stmt) == Db.sqlite.ROW) {
+            // column index 1 in pragma table_info is the column name
+            if (Db.sqlite.sqlite3_column_text(stmt, 1)) |txt| {
+                const dup = try gpa.dupe(u8, std.mem.span(txt));
+                try col_names.append(gpa, dup);
+            }
+        }
+
+        var has_id = false;
+        var has_name = false;
+        var has_slug = false;
+        var has_views = false;
+        var has_featured = false;
+        var has_data = false;
+
+        for (col_names.items) |cn| {
+            if (std.mem.eql(u8, cn, "id")) has_id = true;
+            if (std.mem.eql(u8, cn, "name")) has_name = true;
+            if (std.mem.eql(u8, cn, "slug")) has_slug = true;
+            if (std.mem.eql(u8, cn, "views")) has_views = true;
+            if (std.mem.eql(u8, cn, "featured")) has_featured = true;
+            if (std.mem.eql(u8, cn, "data")) has_data = true;
+        }
+
+        try testing.expect(has_id);
+        try testing.expect(has_name);
+        try testing.expect(has_slug);
+        try testing.expect(has_views);
+        try testing.expect(has_featured);
+        try testing.expect(!has_data); // Crucial! No fake 'data' column!
+    }
+
+    // 3. Raw SQL query directly against real relational columns
+    {
+        var stmt: ?*anyopaque = null;
+        const rc = Db.sqlite.sqlite3_prepare_v2(db.handle, "SELECT name, views, featured FROM ProjectModel WHERE slug = 'aimlite';", -1, &stmt, null);
+        try testing.expectEqual(Db.sqlite.OK, rc);
+        defer _ = Db.sqlite.sqlite3_finalize(stmt);
+
+        try testing.expectEqual(Db.sqlite.ROW, Db.sqlite.sqlite3_step(stmt));
+        const name_txt = Db.sqlite.sqlite3_column_text(stmt, 0).?;
+        try testing.expectEqualStrings("AIMLite", std.mem.span(name_txt));
+        const views_val = Db.sqlite.sqlite3_column_int64(stmt, 1);
+        try testing.expectEqual(@as(i64, 150), views_val);
+    }
+
+    // 4. Model.find by ID returns properly mapped instance from real columns
+    {
+        var found = try ProjectModel.model.find(&db, gpa, "proj_aimlite");
+        try testing.expect(found != null);
+        defer found.?.deinit();
+        try testing.expectEqualStrings("AIMLite", found.?.value.name);
+        try testing.expectEqualStrings("aimlite", found.?.value.slug);
+        try testing.expectEqual(@as(u64, 150), found.?.value.views);
+        try testing.expect(found.?.value.featured);
+    }
+
+    // 5. QueryBuilder with SQL WHERE, ORDER BY, LIMIT
+    {
+        var q = ProjectModel.model.query(&db, gpa);
+        _ = q.whereNum("views", .gt, 100);
+        _ = q.orderBy("views", .desc);
+        const results = try q.exec();
+        defer {
+            for (results) |*r| r.deinit();
+            gpa.free(results);
+        }
+        try testing.expectEqual(@as(usize, 1), results.len);
+        try testing.expectEqualStrings("AIMLite", results[0].value.name);
+    }
+
+    // 6. QueryBuilder count
+    {
+        var q = ProjectModel.model.query(&db, gpa);
+        _ = q.where("slug", .eq, "aimlite");
+        const c = try q.count();
+        try testing.expectEqual(@as(usize, 1), c);
+    }
+}

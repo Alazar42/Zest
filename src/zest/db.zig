@@ -30,6 +30,16 @@ pub const sqlite = struct {
     pub extern "c" fn sqlite3_column_text(pStmt: ?*anyopaque, iCol: c_int) ?[*:0]const u8;
     pub extern "c" fn sqlite3_column_bytes(pStmt: ?*anyopaque, iCol: c_int) c_int;
     pub extern "c" fn sqlite3_column_count(pStmt: ?*anyopaque) c_int;
+    pub const INTEGER: c_int = 1;
+    pub const FLOAT: c_int = 2;
+    pub const TEXT: c_int = 3;
+    pub const BLOB: c_int = 4;
+    pub const NULL: c_int = 5;
+
+    pub extern "c" fn sqlite3_column_name(pStmt: ?*anyopaque, N: c_int) ?[*:0]const u8;
+    pub extern "c" fn sqlite3_column_type(pStmt: ?*anyopaque, iCol: c_int) c_int;
+    pub extern "c" fn sqlite3_column_int64(pStmt: ?*anyopaque, iCol: c_int) i64;
+    pub extern "c" fn sqlite3_column_double(pStmt: ?*anyopaque, iCol: c_int) f64;
     pub extern "c" fn sqlite3_finalize(pStmt: ?*anyopaque) c_int;
     pub extern "c" fn sqlite3_errmsg(pDb: ?*anyopaque) [*:0]const u8;
 };
@@ -51,6 +61,7 @@ pub const pq = struct {
     pub extern "c" fn PQnfields(res: ?*anyopaque) c_int;
     pub extern "c" fn PQfname(res: ?*anyopaque, field_num: c_int) ?[*:0]const u8;
     pub extern "c" fn PQgetvalue(res: ?*anyopaque, tup_num: c_int, field_num: c_int) ?[*:0]const u8;
+    pub extern "c" fn PQgetisnull(res: ?*anyopaque, tup_num: c_int, field_num: c_int) c_int;
     pub extern "c" fn PQclear(res: ?*anyopaque) void;
 };
 
@@ -102,7 +113,7 @@ db_name: []const u8 = "zest",
 const Self = @This();
 
 /// Safely escapes single quotes for SQL string literals.
-fn escapeSql(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+pub fn escapeSql(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     var quote_count: usize = 0;
     for (input) |c| {
         if (c == '\'') quote_count += 1;
@@ -297,13 +308,6 @@ fn ensureTableSqlite(self: *Self, table_name: []const u8) !void {
     defer self.allocator.free(ddl_z);
 
     _ = sqlite.sqlite3_exec(self.handle, ddl_z, null, null, null);
-
-    // If the table was created with custom schema, ensure 'data' column exists
-    const alter = try std.fmt.allocPrint(self.allocator, "ALTER TABLE {s} ADD COLUMN data TEXT;", .{table_name});
-    defer self.allocator.free(alter);
-    const alter_z = try self.allocator.dupeZ(u8, alter);
-    defer self.allocator.free(alter_z);
-    _ = sqlite.sqlite3_exec(self.handle, alter_z, null, null, null);
 }
 
 fn ensureTablePostgres(self: *Self, table_name: []const u8) !void {
@@ -315,13 +319,6 @@ fn ensureTablePostgres(self: *Self, table_name: []const u8) !void {
 
     const res = pq.PQexec(self.handle, ddl_z);
     if (res) |r| pq.PQclear(r);
-
-    const alter = try std.fmt.allocPrint(self.allocator, "ALTER TABLE {s} ADD COLUMN IF NOT EXISTS data TEXT;", .{table_name});
-    defer self.allocator.free(alter);
-    const alter_z = try self.allocator.dupeZ(u8, alter);
-    defer self.allocator.free(alter_z);
-    const res2 = pq.PQexec(self.handle, alter_z);
-    if (res2) |r| pq.PQclear(r);
 }
 
 // --- Universal CRUD Operations ---
@@ -395,7 +392,6 @@ pub fn insert(self: *Self, table_name: []const u8, id: []const u8, json_data: []
 pub fn findByIdAlloc(self: *Self, table_name: []const u8, id: []const u8, allocator: std.mem.Allocator) !?[]const u8 {
     switch (self.kind) {
         .sqlite => {
-            try self.ensureTableSqlite(table_name);
             const safe_id = try escapeSql(allocator, id);
             defer allocator.free(safe_id);
 
@@ -420,21 +416,38 @@ pub fn findByIdAlloc(self: *Self, table_name: []const u8, id: []const u8, alloca
             return null;
         },
         .postgres => {
-            try self.ensureTablePostgres(table_name);
             const safe_id = try escapeSql(allocator, id);
             defer allocator.free(safe_id);
 
-            const sql = try std.fmt.allocPrint(allocator, "SELECT data FROM {s} WHERE id = '{s}' LIMIT 1;", .{ table_name, safe_id });
-            defer allocator.free(sql);
+            // First try SELECT data (for KV / document tables)
+            const sql1 = try std.fmt.allocPrint(allocator, "SELECT data FROM {s} WHERE id = '{s}' LIMIT 1;", .{ table_name, safe_id });
+            defer allocator.free(sql1);
 
-            const sql_z = try allocator.dupeZ(u8, sql);
-            defer allocator.free(sql_z);
+            const sql1_z = try allocator.dupeZ(u8, sql1);
+            defer allocator.free(sql1_z);
 
-            const res = pq.PQexec(self.handle, sql_z);
-            if (res) |r| {
-                defer pq.PQclear(r);
-                if (pq.PQresultStatus(r) == pq.PGRES_TUPLES_OK and pq.PQntuples(r) > 0) {
-                    if (pq.PQgetvalue(r, 0, 0)) |val_ptr| {
+            const res1 = pq.PQexec(self.handle, sql1_z);
+            if (res1) |r1| {
+                defer pq.PQclear(r1);
+                if (pq.PQresultStatus(r1) == pq.PGRES_TUPLES_OK and pq.PQntuples(r1) > 0) {
+                    if (pq.PQgetvalue(r1, 0, 0)) |val_ptr| {
+                        return try allocator.dupe(u8, std.mem.span(val_ptr));
+                    }
+                }
+            }
+
+            // Fallback to row_to_json if table has relational schema (no 'data' column)
+            const sql2 = try std.fmt.allocPrint(allocator, "SELECT row_to_json(t) FROM (SELECT * FROM {s} WHERE id = '{s}' LIMIT 1) t;", .{ table_name, safe_id });
+            defer allocator.free(sql2);
+
+            const sql2_z = try allocator.dupeZ(u8, sql2);
+            defer allocator.free(sql2_z);
+
+            const res2 = pq.PQexec(self.handle, sql2_z);
+            if (res2) |r2| {
+                defer pq.PQclear(r2);
+                if (pq.PQresultStatus(r2) == pq.PGRES_TUPLES_OK and pq.PQntuples(r2) > 0) {
+                    if (pq.PQgetvalue(r2, 0, 0)) |val_ptr| {
                         return try allocator.dupe(u8, std.mem.span(val_ptr));
                     }
                 }
@@ -470,8 +483,6 @@ pub fn findAll(self: *Self, table_name: []const u8, allocator: std.mem.Allocator
                 col_list.deinit(allocator);
             }
 
-            try self.ensureTableSqlite(table_name);
-
             const sql = try std.fmt.allocPrint(allocator, "SELECT data FROM {s};", .{table_name});
             defer allocator.free(sql);
 
@@ -500,22 +511,43 @@ pub fn findAll(self: *Self, table_name: []const u8, allocator: std.mem.Allocator
                 col_list.deinit(allocator);
             }
 
-            try self.ensureTablePostgres(table_name);
+            const sql1 = try std.fmt.allocPrint(allocator, "SELECT data FROM {s};", .{table_name});
+            defer allocator.free(sql1);
 
-            const sql = try std.fmt.allocPrint(allocator, "SELECT data FROM {s};", .{table_name});
-            defer allocator.free(sql);
+            const sql1_z = try allocator.dupeZ(u8, sql1);
+            defer allocator.free(sql1_z);
 
-            const sql_z = try allocator.dupeZ(u8, sql);
-            defer allocator.free(sql_z);
-
-            const res = pq.PQexec(self.handle, sql_z);
-            if (res) |r| {
-                defer pq.PQclear(r);
-                if (pq.PQresultStatus(r) == pq.PGRES_TUPLES_OK) {
-                    const rows = pq.PQntuples(r);
+            const res1 = pq.PQexec(self.handle, sql1_z);
+            if (res1) |r1| {
+                defer pq.PQclear(r1);
+                if (pq.PQresultStatus(r1) == pq.PGRES_TUPLES_OK) {
+                    const rows = pq.PQntuples(r1);
                     var i: c_int = 0;
                     while (i < rows) : (i += 1) {
-                        if (pq.PQgetvalue(r, i, 0)) |val_ptr| {
+                        if (pq.PQgetvalue(r1, i, 0)) |val_ptr| {
+                            const duped = try allocator.dupe(u8, std.mem.span(val_ptr));
+                            try col_list.append(allocator, duped);
+                        }
+                    }
+                    return col_list.toOwnedSlice(allocator);
+                }
+            }
+
+            // Fallback to row_to_json if table has no 'data' column
+            const sql2 = try std.fmt.allocPrint(allocator, "SELECT row_to_json(t) FROM (SELECT * FROM {s}) t;", .{table_name});
+            defer allocator.free(sql2);
+
+            const sql2_z = try allocator.dupeZ(u8, sql2);
+            defer allocator.free(sql2_z);
+
+            const res2 = pq.PQexec(self.handle, sql2_z);
+            if (res2) |r2| {
+                defer pq.PQclear(r2);
+                if (pq.PQresultStatus(r2) == pq.PGRES_TUPLES_OK) {
+                    const rows = pq.PQntuples(r2);
+                    var i: c_int = 0;
+                    while (i < rows) : (i += 1) {
+                        if (pq.PQgetvalue(r2, i, 0)) |val_ptr| {
                             const duped = try allocator.dupe(u8, std.mem.span(val_ptr));
                             try col_list.append(allocator, duped);
                         }
