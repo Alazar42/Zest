@@ -180,7 +180,11 @@ pub fn parseJson(self: *Self, comptime T: type) !std.json.Parsed(T) {
 /// If invalid, automatically sends HTTP 422 Unprocessable Entity with field errors and returns null.
 pub fn validateJson(self: *Self, comptime T: type, res: *Response) !?std.json.Parsed(T) {
     const body = self.readBodyAlloc(1024 * 1024) catch {
-        try res.status(.unprocessable_entity, "{\"detail\":[{\"field\":\"body\",\"message\":\"Could not read request body\"}]}");
+        try res.status(.unprocessable_entity, .{
+            .detail = &[_]struct { field: []const u8, message: []const u8 }{
+                .{ .field = "body", .message = "Could not read request body" },
+            },
+        });
         return null;
     };
     defer self.allocator.free(body);
@@ -189,7 +193,11 @@ pub fn validateJson(self: *Self, comptime T: type, res: *Response) !?std.json.Pa
         .ignore_unknown_fields = true,
         .allocate = .alloc_always,
     }) catch {
-        try res.status(.unprocessable_entity, "{\"detail\":[{\"field\":\"body\",\"message\":\"Malformed JSON payload\"}]}");
+        try res.status(.unprocessable_entity, .{
+            .detail = &[_]struct { field: []const u8, message: []const u8 }{
+                .{ .field = "body", .message = "Malformed JSON payload" },
+            },
+        });
         return null;
     };
 
@@ -199,9 +207,7 @@ pub fn validateJson(self: *Self, comptime T: type, res: *Response) !?std.json.Pa
 
         parsed.value.validate(&validation_errs);
         if (validation_errs.hasErrors()) {
-            const err_json = try validation_errs.toJson(self.allocator);
-            defer self.allocator.free(err_json);
-            try res.status(.unprocessable_entity, err_json);
+            try res.status(.unprocessable_entity, .{ .detail = validation_errs.errors.items });
             parsed.deinit();
             return null;
         }

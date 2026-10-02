@@ -117,12 +117,18 @@ pub fn jwtAuth(comptime secret: []const u8) MiddlewareFn {
     return struct {
         fn handle(req: *Request, res: *Response) anyerror!bool {
             const token = req.bearerToken() orelse {
-                try res.status(.unauthorized, "{\"error\":\"Unauthorized\",\"detail\":\"Missing Bearer authorization token\"}");
+                try res.status(.unauthorized, .{
+                    .@"error" = "Unauthorized",
+                    .detail = "Missing Bearer authorization token",
+                });
                 return false;
             };
 
             const payload = jwt.verify(req.allocator, token, secret) catch {
-                try res.status(.unauthorized, "{\"error\":\"Unauthorized\",\"detail\":\"Invalid or expired JWT token\"}");
+                try res.status(.unauthorized, .{
+                    .@"error" = "Unauthorized",
+                    .detail = "Invalid or expired JWT token",
+                });
                 return false;
             };
             req.auth_claims = payload;

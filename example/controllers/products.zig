@@ -20,7 +20,9 @@ pub fn getAll(req: *zest.Request, res: *zest.Response) !void {
 /// GET /api/v1/products/:id - Fetch single product by UUID
 pub fn getById(req: *zest.Request, res: *zest.Response) !void {
     const id = req.param("id") orelse {
-        try res.status(.bad_request, .{ .@"error" = "Missing product ID" });
+        try res.status(.bad_request, .{
+            .@"error" = "Missing product ID",
+        });
         return;
     };
 
@@ -29,7 +31,9 @@ pub fn getById(req: *zest.Request, res: *zest.Response) !void {
         defer p.deinit();
         try res.json(p.value);
     } else {
-        try res.status(.not_found, .{ .@"error" = "Product not found" });
+        try res.status(.not_found, .{
+            .@"error" = "Product not found",
+        });
     }
 }
 
@@ -60,4 +64,3 @@ pub fn deleteProduct(req: *zest.Request, res: *zest.Response) !void {
         try res.status(.not_found, .{ .@"error" = "Product not found" });
     }
 }
-

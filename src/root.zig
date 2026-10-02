@@ -273,6 +273,36 @@ test "JWT HS256 sign and verify" {
     try testing.expectError(error.InvalidSignature, invalid);
 }
 
+test "JWT HS256 sign with Zig struct literal and verifyAs" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const secret = "zest_super_secret_signing_key_12345";
+    const token = try jwt.sign(gpa, .{ .sub = "user42", .role = "admin" }, secret);
+    defer gpa.free(token);
+
+    const Claims = struct { sub: []const u8, role: []const u8 };
+    const parsed = try jwt.verifyAs(Claims, gpa, token, secret);
+    defer parsed.deinit();
+
+    try testing.expectEqualStrings("user42", parsed.value.sub);
+    try testing.expectEqualStrings("admin", parsed.value.role);
+}
+
+test "Db.insert with Zig struct literal" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var db = Db.initNoSql(gpa);
+    defer db.deinit();
+
+    try db.insert("users", "u1", .{ .name = "Alice", .role = "admin" });
+    const fetched = try db.findByIdAlloc("users", "u1", gpa);
+    try testing.expect(fetched != null);
+    defer gpa.free(fetched.?);
+    try testing.expectEqualStrings("{\"name\":\"Alice\",\"role\":\"admin\"}", fetched.?);
+}
+
 test "Dual SQL / NoSQL Database and ORM operations" {
     const testing = std.testing;
     const gpa = testing.allocator;

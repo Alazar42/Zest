@@ -13,9 +13,58 @@ pub const JwtError = error{
     OutOfMemory,
 };
 
-/// Signs a JSON string payload with the given secret key using HMAC-SHA256 (HS256).
+fn isString(comptime T: type) bool {
+    switch (@typeInfo(T)) {
+        .pointer => |ptr| {
+            if (ptr.size == .slice) {
+                return ptr.child == u8;
+            } else if (ptr.size == .one) {
+                return switch (@typeInfo(ptr.child)) {
+                    .array => |arr| arr.child == u8,
+                    else => false,
+                };
+            }
+            return false;
+        },
+        .array => |arr| {
+            return arr.child == u8;
+        },
+        else => return false,
+    }
+}
+
+fn asStringSlice(val: anytype) []const u8 {
+    const T = @TypeOf(val);
+    if (comptime isString(T)) {
+        switch (@typeInfo(T)) {
+            .pointer => |ptr| {
+                if (ptr.size == .slice) {
+                    return val;
+                } else if (ptr.size == .one) {
+                    return val[0..];
+                }
+            },
+            .array => return val[0..],
+            else => unreachable,
+        }
+    }
+    unreachable;
+}
+
+/// Signs a JSON string or any Zig struct/payload with the given secret key using HMAC-SHA256 (HS256).
 /// Caller owns the returned token slice.
-pub fn sign(allocator: std.mem.Allocator, payload_json: []const u8, secret: []const u8) ![]u8 {
+pub fn sign(allocator: std.mem.Allocator, payload: anytype, secret: []const u8) ![]u8 {
+    const T = @TypeOf(payload);
+    const payload_json: []const u8 = if (comptime isString(T))
+        asStringSlice(payload)
+    else
+        try std.json.Stringify.valueAlloc(allocator, payload, .{});
+    defer {
+        if (comptime !isString(T)) {
+            allocator.free(payload_json);
+        }
+    }
+
     const payload_b64_len = b64_encoder.calcSize(payload_json.len);
     const payload_b64 = try allocator.alloc(u8, payload_b64_len);
     defer allocator.free(payload_b64);
@@ -79,4 +128,14 @@ pub fn verify(allocator: std.mem.Allocator, token: []const u8, secret: []const u
     b64_decoder.decode(payload, payload_b64) catch return error.MalformedToken;
 
     return payload;
+}
+
+/// Verifies a JWT token signature and parses the decoded JSON payload into a Zig struct `T`.
+pub fn verifyAs(comptime T: type, allocator: std.mem.Allocator, token: []const u8, secret: []const u8) !std.json.Parsed(T) {
+    const payload = try verify(allocator, token, secret);
+    defer allocator.free(payload);
+    return try std.json.parseFromSlice(T, allocator, payload, .{
+        .ignore_unknown_fields = true,
+        .allocate = .alloc_always,
+    });
 }

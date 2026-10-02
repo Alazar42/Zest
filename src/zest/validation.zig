@@ -44,18 +44,7 @@ pub const ValidationErrors = struct {
     /// Serializes errors into FastAPI / Pydantic style JSON:
     /// `{"detail": [{"field": "email", "message": "Invalid email format"}]}`
     pub fn toJson(self: *const ValidationErrors, allocator: std.mem.Allocator) ![]u8 {
-        var buf: std.ArrayList(u8) = .empty;
-        errdefer buf.deinit(allocator);
-
-        try buf.appendSlice(allocator, "{\"detail\":[");
-        for (self.errors.items, 0..) |err_item, i| {
-            if (i > 0) try buf.append(allocator, ',');
-            const item_str = try std.fmt.allocPrint(allocator, "{{\"field\":\"{s}\",\"message\":\"{s}\"}}", .{ err_item.field, err_item.message });
-            defer allocator.free(item_str);
-            try buf.appendSlice(allocator, item_str);
-        }
-        try buf.appendSlice(allocator, "]}");
-        return buf.toOwnedSlice(allocator);
+        return std.json.Stringify.valueAlloc(allocator, .{ .detail = self.errors.items }, .{});
     }
 };
 

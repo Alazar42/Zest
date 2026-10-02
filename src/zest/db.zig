@@ -321,10 +321,60 @@ fn ensureTablePostgres(self: *Self, table_name: []const u8) !void {
     if (res) |r| pq.PQclear(r);
 }
 
+fn isString(comptime T: type) bool {
+    switch (@typeInfo(T)) {
+        .pointer => |ptr| {
+            if (ptr.size == .slice) {
+                return ptr.child == u8;
+            } else if (ptr.size == .one) {
+                return switch (@typeInfo(ptr.child)) {
+                    .array => |arr| arr.child == u8,
+                    else => false,
+                };
+            }
+            return false;
+        },
+        .array => |arr| {
+            return arr.child == u8;
+        },
+        else => return false,
+    }
+}
+
+fn asStringSlice(val: anytype) []const u8 {
+    const T = @TypeOf(val);
+    if (comptime isString(T)) {
+        switch (@typeInfo(T)) {
+            .pointer => |ptr| {
+                if (ptr.size == .slice) {
+                    return val;
+                } else if (ptr.size == .one) {
+                    return val[0..];
+                }
+            },
+            .array => return val[0..],
+            else => unreachable,
+        }
+    }
+    unreachable;
+}
+
 // --- Universal CRUD Operations ---
 
 /// Inserts or replaces a record/document in a table or collection across SQLite, PostgreSQL, and MongoDB.
-pub fn insert(self: *Self, table_name: []const u8, id: []const u8, json_data: []const u8) !void {
+/// Accepts either a raw JSON string or any Zig struct/value.
+pub fn insert(self: *Self, table_name: []const u8, id: []const u8, data: anytype) !void {
+    const T = @TypeOf(data);
+    const json_data: []const u8 = if (comptime isString(T))
+        asStringSlice(data)
+    else
+        try std.json.Stringify.valueAlloc(self.allocator, data, .{});
+    defer {
+        if (comptime !isString(T)) {
+            self.allocator.free(json_data);
+        }
+    }
+
     switch (self.kind) {
         .sqlite => {
             try self.ensureTableSqlite(table_name);
