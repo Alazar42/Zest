@@ -1014,3 +1014,66 @@ test "Relational Model schema and column mapping in SQLite" {
         try testing.expectEqual(@as(usize, 1), c);
     }
 }
+
+test "Relational relationships hasMany and belongsTo in SQLite" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const test_db = "relational_rel_test.db";
+    _ = std.os.linux.unlink(test_db);
+    defer _ = std.os.linux.unlink(test_db);
+
+    var db = try Db.connect(gpa, "sqlite:relational_rel_test.db");
+    defer db.deinit();
+
+    const Author = struct {
+        id: u32,
+        name: []const u8,
+
+        pub const model = Model(@This());
+    };
+
+    const Article = struct {
+        id: u32,
+        author_id: u32,
+        title: []const u8,
+
+        pub const model = Model(@This());
+    };
+
+    const a1 = Author{ .id = 1, .name = "Ada Lovelace" };
+    try Author.model.save(&db, gpa, &a1);
+
+    const art1 = Article{ .id = 10, .author_id = 1, .title = "Analytical Engine Note G" };
+    const art2 = Article{ .id = 11, .author_id = 1, .title = "Bernoulli Numbers" };
+    const art3 = Article{ .id = 12, .author_id = 2, .title = "Other Article" };
+
+    try Article.model.save(&db, gpa, &art1);
+    try Article.model.save(&db, gpa, &art2);
+    try Article.model.save(&db, gpa, &art3);
+
+    // 1. Test hasMany: Author -> hasMany Article
+    {
+        const articles = try Author.model.hasMany(&a1, Article, "author_id", &db, gpa);
+        defer {
+            for (articles) |*art| art.deinit();
+            gpa.free(articles);
+        }
+        try testing.expectEqual(@as(usize, 2), articles.len);
+        const t0 = articles[0].value.title;
+        const t1 = articles[1].value.title;
+        const has_note_g = std.mem.eql(u8, t0, "Analytical Engine Note G") or std.mem.eql(u8, t1, "Analytical Engine Note G");
+        const has_bernoulli = std.mem.eql(u8, t0, "Bernoulli Numbers") or std.mem.eql(u8, t1, "Bernoulli Numbers");
+        try testing.expect(has_note_g);
+        try testing.expect(has_bernoulli);
+    }
+
+    // 2. Test belongsTo: Article -> belongsTo Author
+    {
+        var author_opt = try Article.model.belongsTo(&art1, Author, "author_id", &db, gpa);
+        try testing.expect(author_opt != null);
+        defer author_opt.?.deinit();
+        try testing.expectEqual(@as(u32, 1), author_opt.?.value.id);
+        try testing.expectEqualStrings("Ada Lovelace", author_opt.?.value.name);
+    }
+}
