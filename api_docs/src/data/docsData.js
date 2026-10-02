@@ -93,7 +93,7 @@ Zest combines the productivity and developer ergonomics of modern web frameworks
 const zest = @import("zest");
 
 fn helloHandler(res: *zest.Response) !void {
-    try res.json("{\\"message\\": \\"Hello, Zest!\\"}");
+    try res.json(.{ .message = "Hello, Zest!" });
 }
 
 pub fn main() !void {
@@ -441,22 +441,22 @@ pub fn getAll(req: *zest.Request, res: *zest.Response) !void {
         for (products) |*p| p.deinit();
         req.allocator.free(products);
     }
-    try res.jsonValue(products);
+    try res.json(products);
 }
 
 /// GET /api/v1/products/:id - Fetch single product by UUID
 pub fn getById(req: *zest.Request, res: *zest.Response) !void {
     const id = req.param("id") orelse {
-        try res.status(.bad_request, "{\\"error\\": \\"Missing product ID\\"}");
+        try res.status(.bad_request, .{ .@"error" = "Missing product ID" });
         return;
     };
 
     var found = try Product.model.find(&database.db, req.allocator, id);
     if (found) |*p| {
         defer p.deinit();
-        try res.jsonValue(p.value);
+        try res.json(p.value);
     } else {
-        try res.status(.not_found, "{\\"error\\": \\"Product not found\\"}");
+        try res.status(.not_found, .{ .@"error" = "Product not found" });
     }
 }
 
@@ -471,21 +471,20 @@ pub fn create(req: *zest.Request, res: *zest.Response) !void {
     }
 
     try Product.model.save(&database.db, req.allocator, &product);
-    const body = try std.fmt.allocPrint(req.allocator, "{{\\"status\\":\\"created\\",\\"id\\":\\"{s}\\"}}", .{product.id.?});
-    try res.status(.created, body);
+    try res.status(.created, .{ .status = "created", .id = product.id.? });
 }
 
 /// DELETE /api/v1/products/:id - Delete product by UUID
 pub fn deleteProduct(req: *zest.Request, res: *zest.Response) !void {
     const id = req.param("id") orelse {
-        try res.status(.bad_request, "{\\"error\\": \\"Missing product ID\\"}");
+        try res.status(.bad_request, .{ .@"error" = "Missing product ID" });
         return;
     };
 
     if (Product.model.delete(&database.db, id)) {
-        try res.json("{\\"message\\": \\"Product deleted successfully\\"}");
+        try res.json(.{ .message = "Product deleted successfully" });
     } else {
-        try res.status(.not_found, "{\\"error\\": \\"Product not found\\"}");
+        try res.status(.not_found, .{ .@"error" = "Product not found" });
     }
 }`
       },
@@ -515,7 +514,7 @@ const Product = @import("models/product.zig").Product;
 const products_routes = @import("routes/products.zig");
 
 fn welcome(res: *zest.Response) !void {
-    try res.json("{\\"message\\": \\"Welcome to Zest API! Visit /docs for Swagger UI.\\"}");
+    try res.json(.{ .message = "Welcome to Zest API! Visit /docs for Swagger UI." });
 }
 
 pub fn main() !void {
@@ -589,7 +588,7 @@ fn listProducts(req: *zest.Request, res: *zest.Response) !void {
         for (products) |*p| p.deinit();
         req.allocator.free(products);
     }
-    try res.jsonValue(products);
+    try res.json(products);
 }
 
 fn createProduct(req: *zest.Request, res: *zest.Response) !void {
@@ -602,8 +601,7 @@ fn createProduct(req: *zest.Request, res: *zest.Response) !void {
     }
 
     try Product.model.save(&db, req.allocator, &product);
-    const body = try std.fmt.allocPrint(req.allocator, "{{\"status\":\"created\",\"id\":\"{s}\"}}", .{product.id.?});
-    try res.status(.created, body);
+    try res.status(.created, .{ .status = "created", .id = product.id.? });
 }
 
 pub fn main() !void {
@@ -651,7 +649,7 @@ Zest supports all standard HTTP methods: \`get\`, \`post\`, \`put\`, \`delete\`,
         code: `// GET handler
 try app.get("/health", struct {
     fn check(res: *zest.Response) !void {
-        try res.json("{\\"status\\":\\"ok\\"}");
+        try res.json(.{ .status = "ok" });
     }
 }.check);
 
@@ -682,14 +680,14 @@ Routes with segments starting with \`:\` define dynamic parameters (e.g. \`/user
         language: 'zig',
         code: `fn getUser(req: *zest.Request, res: *zest.Response) !void {
     const user_id = req.paramInt("id", u32) orelse {
-        try res.status(.bad_request, "{\\"error\\":\\"Invalid user ID\\"}");
+        try res.status(.bad_request, .{ .@"error" = "Invalid user ID" });
         return;
     };
 
     const include_history = req.queryParam("history") != null;
 
     // Fetch user record...
-    try res.json("{\\"user_id\\": 123}");
+    try res.json(.{ .user_id = user_id });
 }`
       }
     ]
@@ -756,10 +754,10 @@ In Zest, query parameters are easily extracted from \`req\` with zero boilerplat
     // 3. Execute and stream JSON results
     const results = try q.exec();
     defer {
-        for (results) |*r| r.deinit();
+        for (results) |*p| p.deinit();
         req.allocator.free(results);
     }
-    try res.jsonValue(results);
+    try res.json(results);
 }`
       }
     ]
@@ -803,9 +801,10 @@ try auth_group.post("/register", registerHandler);`
 - \`req.addBackgroundTask(fn, ctx)\`: Schedule background tasks.
 
 ### Response Methods
-- \`res.json(payload)\`: Write JSON string with \`application/json\` header.
-- \`res.jsonValue(val)\`: Serialize any Zig struct directly to JSON response.
-- \`res.status(code, body)\`: Set HTTP status code (e.g. \`.created\`, \`.not_found\`).
+- \`res.json(val)\`: Write JSON response from any Zig struct, model, slice, or raw JSON string.
+- \`res.status(code, val)\`: Set HTTP status code (e.g. \`.created\`, \`.not_found\`) and serialize Zig struct or string.
+- \`res.err(code, message)\`: Send standardized error JSON \`{"error":"..."}\` with status code.
+- \`res.badRequest(val)\`, \`res.notFound(val)\`, \`res.created(val)\`: Status convenience helpers.
 - \`res.setHeader(name, val)\`: Add custom HTTP response header.
 - \`res.setCookie(name, val, opts)\`: Issue HTTP cookies.
     `,
@@ -833,9 +832,10 @@ Zest leverages Zig's native \`std.http.Status\` enum for compile-time validated 
 - \`.internal_server_error\` (500)
 
 ### Primary Response Helpers
-- \`res.jsonValue(val)\`: Automatically serializes any Zig struct, array, slice, Model instance, or \`std.json.Parsed(T)\` into an HTTP 200 JSON response.
-- \`res.json(raw_json_string)\`: Responds with raw JSON string and \`application/json\` header.
-- \`res.status(status, body)\`: Sets custom status code and content.
+- \`res.json(val)\`: Automatically serializes any Zig struct, array, slice, Model instance, or raw JSON string into an HTTP 200 JSON response.
+- \`res.status(status, val)\`: Responds with custom HTTP status code and serializes any Zig struct/object to JSON (or sends raw string).
+- \`res.err(status, message)\`: Sends an error JSON object \`{"error": "..."}\` with the specified status code.
+- \`res.created(val)\`, \`res.badRequest(val)\`, \`res.notFound(val)\`: Semantic HTTP status helpers.
 - \`res.text(plain_text)\`: Responds with \`text/plain\`.
 - \`res.html("<h1>Hello</h1>")\`: Responds with \`text/html\`.
 - \`res.redirect("/login")\`: Sends HTTP 302 Found redirect with \`Location\` header.
@@ -844,8 +844,11 @@ Zest leverages Zig's native \`std.http.Status\` enum for compile-time validated 
       {
         title: 'Response Status Examples',
         language: 'zig',
-        code: `// 201 Created with JSON
-try res.status(.created, "{\\"status\\":\\"created\\",\\"id\\":101}");
+        code: `// 201 Created with Zig struct literal
+try res.status(.created, .{ .status = "created", .id = 101 });
+
+// Error response helper
+try res.err(.bad_request, "Invalid input payload");
 
 // 204 No Content
 try res.send("", .{ .status = .no_content });
@@ -884,34 +887,24 @@ Or for validation errors, an array of faulty fields:
 }
 \`\`\`
 
-### Writing Reusable Error Helpers
-You can define helper functions in your project for clean, expressive error returns without repeated string allocation:
+### Writing Expressive Controller Responses
+With Zest's object responses and \`res.err(...)\`, returning errors is clean with zero manual allocations or string formatting:
     `,
     codeExamples: [
       {
-        title: 'Clean Error Response Helpers',
+        title: 'Clean Error Responses',
         language: 'zig',
-        code: `pub fn sendError(res: *zest.Response, status: std.http.Status, message: []const u8) !void {
-    var buf: [256]u8 = undefined;
-    const body = try std.fmt.bufPrint(&buf, "{{\"error\":\"{s}\",\"status\":{d}}}", .{
-        message,
-        @intFromEnum(status),
-    });
-    try res.status(status, body);
-}
-
-// In your controller:
-pub fn getOrder(req: *zest.Request, res: *zest.Response) !void {
+        code: `pub fn getOrder(req: *zest.Request, res: *zest.Response) !void {
     const order_id = req.paramInt("id", u32) orelse {
-        return sendError(res, .bad_request, "Invalid order ID");
+        return res.err(.bad_request, "Invalid order ID");
     };
 
     var found = try Order.model.find(&database.db, req.allocator, order_id);
     if (found) |*ord| {
         defer ord.deinit();
-        try res.jsonValue(ord.value);
+        try res.json(ord.value);
     } else {
-        return sendError(res, .not_found, "Order not found");
+        return res.err(.not_found, "Order not found");
     }
 }`
       }
@@ -1041,8 +1034,8 @@ pub fn main() !void {
     var db = try zest.Db.connect(allocator, "sqlite:products.db");
     defer db.deinit();
 
-    // Direct CRUD operations
-    try db.insert("products", "prod_1", "{\\"name\\":\\"MacBook Pro\\",\\"price\\":1999.99}");
+    // Direct CRUD operations with Zig struct
+    try db.insert("products", "prod_1", .{ .name = "MacBook Pro", .price = 1999.99 });
     const product_json = try db.findByIdAlloc("products", "prod_1", allocator);
     if (product_json) |json| {
         defer allocator.free(json);
@@ -1271,7 +1264,7 @@ fn handleRegister(req: *zest.Request, res: *zest.Response) !void {
     var parsed = (try req.validateJson(RegisterInput, res)) orelse return;
     defer parsed.deinit();
 
-    try res.status(.created, "{\\"status\\":\\"registered\\"}");
+    try res.status(.created, .{ .status = "registered" });
 }`
       }
     ]
@@ -1286,7 +1279,7 @@ Schedule tasks (e.g. sending emails, writing audit logs, syncing webhooks) witho
 \`\`\`zig
 fn handleCheckout(req: *zest.Request, res: *zest.Response) !void {
     // 1. Respond to client immediately
-    try res.status(.ok, "{\\"order_id\\": 42, \\"status\\": \\"paid\\"}");
+    try res.json(.{ .order_id = 42, .status = "paid" });
 
     // 2. Schedule non-blocking background task
     const sendConfirmation = struct {
@@ -1321,7 +1314,7 @@ fn uploadAvatar(req: *zest.Request, res: *zest.Response) !void {
         try file.saveTo(req.allocator, "./uploads/avatar.png");
     }
 
-    try res.json("{\\"status\\": \\"uploaded\\"}");
+    try res.json(.{ .status = "uploaded" });
 }
 \`\`\`
     `,
@@ -1486,7 +1479,7 @@ fn createProduct(req: *zest.Request, res: *zest.Response) !void {
     }
 
     try Product.model.save(&db, req.allocator, &product);
-    try res.status(.created, "{\\"status\\":\\"created\\"}");
+    try res.status(.created, .{ .status = "created" });
 }`
       }
     ]
@@ -1600,16 +1593,19 @@ const db_url = zest.zenv.getOr("DATABASE_URL", "sqlite:app.db");`
 Sign and verify JSON Web Tokens (\`HS256\`) with zero external dependencies:
 
 \`\`\`zig
-// Sign token
-const token = try zest.jwt.sign(allocator, "{\\"sub\\":\\"usr_123\\",\\"role\\":\\"admin\\"}", "secret_key_123", 3600);
+// Sign token with Zig struct or raw string
+const token = try zest.jwt.sign(allocator, .{ .sub = "usr_123", .role = "admin" }, "secret_key_123");
 defer allocator.free(token);
 
 // Verify and decode token
 const payload = try zest.jwt.verify(allocator, token, "secret_key_123");
-if (payload) |json_claims| {
-    defer allocator.free(json_claims);
-    std.log.info("Validated claims: {s}", .{json_claims});
-}
+defer allocator.free(payload);
+std.log.info("Validated claims: {s}", .{payload});
+
+// Or decode directly into typed struct:
+const Claims = struct { sub: []const u8, role: []const u8 };
+const parsed = try zest.jwt.verifyAs(Claims, allocator, token, "secret_key_123");
+defer parsed.deinit();
 \`\`\`
     `,
     codeExamples: []
@@ -1636,18 +1632,18 @@ Secure your API by combining Zest's high-speed HS256 JWT cryptography with custo
 
 fn authenticateUser(req: *zest.Request, res: *zest.Response) !?[]const u8 {
     const auth_header = req.header("authorization") orelse {
-        try res.status(.unauthorized, "{\\"error\\": \\"Missing Authorization header\\"}");
+        try res.status(.unauthorized, .{ .@"error" = "Missing Authorization header" });
         return null;
     };
 
     if (!std.mem.startsWith(u8, auth_header, "Bearer ")) {
-        try res.status(.unauthorized, "{\\"error\\": \\"Invalid bearer token format\\"}");
+        try res.status(.unauthorized, .{ .@"error" = "Invalid bearer token format" });
         return null;
     };
 
     const token = auth_header["Bearer ".len..];
     const claims_json = zest.jwt.verify(req.allocator, token, JWT_SECRET) catch {
-        try res.status(.unauthorized, "{\\"error\\": \\"Invalid or expired token\\"}");
+        try res.status(.unauthorized, .{ .@"error" = "Invalid or expired token" });
         return null;
     };
 

@@ -31,7 +31,7 @@ const LANDING_CODE = `const std = @import("std");
 const zest = @import("zest");
 
 fn welcome(res: *zest.Response) !void {
-    try res.json("{\\"message\\": \\"Welcome to Zest API!\\"}");
+    try res.json(.{ .message = "Welcome to Zest API!" });
 }
 
 pub fn main() !void {

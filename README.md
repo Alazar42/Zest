@@ -209,23 +209,23 @@ pub fn getAll(req: *zest.Request, res: *zest.Response) !void {
         for (products) |*p| p.deinit();
         req.allocator.free(products);
     }
-    // res.jsonValue automatically serializes slices of Parsed models cleanly
-    try res.jsonValue(products);
+    // res.json automatically serializes slices of Parsed models cleanly
+    try res.json(products);
 }
 
 /// GET /api/v1/products/:id - Fetch single product by ID
 pub fn getById(req: *zest.Request, res: *zest.Response) !void {
     const id = req.paramInt("id", u32) orelse {
-        try res.status(.bad_request, "{\"error\": \"Invalid product ID\"}");
+        try res.status(.bad_request, .{ .@"error" = "Invalid product ID" });
         return;
     };
 
     var found = try Product.model.find(&database.db, req.allocator, id);
     if (found) |*p| {
         defer p.deinit();
-        try res.jsonValue(p.value);
+        try res.json(p.value);
     } else {
-        try res.status(.not_found, "{\"error\": \"Product not found\"}");
+        try res.status(.not_found, .{ .@"error" = "Product not found" });
     }
 }
 
@@ -235,7 +235,7 @@ pub fn create(req: *zest.Request, res: *zest.Response) !void {
     defer parsed.deinit();
 
     try Product.model.save(&database.db, req.allocator, &parsed.value);
-    try res.status(.created, "{\"status\":\"created\"}");
+    try res.status(.created, .{ .status = "created" });
 }
 ```
 
@@ -261,7 +261,7 @@ const database = @import("database.zig");
 const products_routes = @import("routes/products.zig");
 
 fn welcome(res: *zest.Response) !void {
-    try res.json("{\"message\": \"Welcome to Zest API! Visit /docs for Swagger UI.\"}");
+    try res.json(.{ .message = "Welcome to Zest API! Visit /docs for Swagger UI." });
 }
 
 pub fn main() !void {
@@ -374,7 +374,7 @@ fn handleUpload(req: *zest.Request, res: *zest.Response) !void {
         try file.saveTo(req.allocator, "./uploads/avatar.png");
     }
 
-    try res.json("{\"status\":\"uploaded\"}");
+    try res.json(.{ .status = "uploaded" });
 }
 ```
 
@@ -385,7 +385,7 @@ Schedule background tasks to execute outside the HTTP request/response cycle:
 ```zig
 fn onUserRegistered(req: *zest.Request, res: *zest.Response) !void {
     // Send immediate HTTP 201 response to client
-    try res.status(.created, "{\"message\": \"User registered\"}");
+    try res.status(.created, .{ .message = "User registered" });
 
     // Dispatched to background execution after response completes
     const task = struct {
