@@ -95,8 +95,16 @@ pub fn logger(req: *Request, res: *Response) anyerror!bool {
 pub fn cors(comptime options: CorsOptions) MiddlewareFn {
     return struct {
         fn handle(req: *Request, res: *Response) anyerror!bool {
+            // Determine the appropriate origin header value.
+            var origin_val: []const u8 = options.origin;
+            if (std.mem.eql(u8, options.origin, "*")) {
+                // If wildcard, echo back the request's Origin header if present.
+                if (req.getHeader("origin")) |hdr| {
+                    origin_val = hdr;
+                }
+            }
             // Always add CORS headers
-            try res.setHeader("access-control-allow-origin", options.origin);
+            try res.setHeader("access-control-allow-origin", origin_val);
             try res.setHeader("access-control-allow-methods", options.methods);
             try res.setHeader("access-control-allow-headers", options.headers);
             try res.setHeader("access-control-expose-headers", options.exposeHeaders);
