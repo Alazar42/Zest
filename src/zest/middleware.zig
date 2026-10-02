@@ -8,6 +8,8 @@ pub const CorsOptions = struct {
     origin: []const u8 = "*",
     methods: []const u8 = "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
     headers: []const u8 = "content-type, authorization, accept",
+    allowCredentials: bool = false,
+    exposeHeaders: []const u8 = "*",
 };
 
 /// Formats the HTTP method with distinct ANSI colors:
@@ -97,9 +99,16 @@ pub fn cors(comptime options: CorsOptions) MiddlewareFn {
             try res.setHeader("access-control-allow-origin", options.origin);
             try res.setHeader("access-control-allow-methods", options.methods);
             try res.setHeader("access-control-allow-headers", options.headers);
+            try res.setHeader("access-control-expose-headers", options.exposeHeaders);
+            if (options.allowCredentials) {
+                try res.setHeader("access-control-allow-credentials", "true");
+            }
+            // Handle preflight OPTIONS request
             if (req.method() == .OPTIONS) {
+                // Include max age for caching preflight response
+                try res.setHeader("access-control-max-age", "86400");
                 try res.send("", .{ .status = .no_content });
-                return false; // Handled preflight
+                return false; // Preflight handled
             }
             return true;
         }
