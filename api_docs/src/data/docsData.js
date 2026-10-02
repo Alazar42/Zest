@@ -66,7 +66,7 @@ export const DOCS_SECTIONS = [
     title: 'Testing & Production',
     items: [
       { id: 'testing-guide', title: 'Testing Guide & Test Cases' },
-      { id: 'deployment-docker', title: 'Production & Docker Guide' }
+      { id: 'deployment-docker', title: 'Production, Docker & Vercel' }
     ]
   }
 ];
@@ -1718,8 +1718,8 @@ test "SQLite persistence and retrieval" {
   },
 
   'deployment-docker': {
-    title: 'Production Deployment & Docker',
-    subtitle: 'Optimized binary compilation, containerization, and reverse proxy setup.',
+    title: 'Production Deployment, Docker & Vercel',
+    subtitle: 'Optimized binary compilation, Dockerfile.vercel containerization, and cloud deployment.',
     content: `
 Deploying a Zest application delivers exceptional throughput with minimal memory footprint (typically < 15MB RAM under heavy load).
 
@@ -1740,7 +1740,7 @@ The compiled binary will be placed in \`zig-out/bin/\`.
 
 ---
 
-### 2. Multi-Stage Dockerfile
+### 2. Multi-Stage Dockerfile (Standard)
 Use this lightweight Dockerfile to compile and run your service inside an Alpine or Debian container:
 
 \`\`\`dockerfile
@@ -1766,7 +1766,25 @@ CMD ["/app/server"]
 
 ---
 
-### 3. Production Reverse Proxy (Caddy / Nginx)
+### 3. Vercel Cloud Deployment (Dockerfile.vercel)
+Zest applications can be containerized and deployed to Vercel with zero overhead:
+
+1. **Host Binding**: Ensure your application binds to \`HOST=0.0.0.0\` (not \`127.0.0.1\` or \`localhost\`) so container traffic is received on all network interfaces:
+   \`\`\`zig
+   const host = zest.zenv.getOr("HOST", "0.0.0.0");
+   const port = zest.zenv.getInt("PORT", u16) orelse 3000;
+   var app = zest.init(host, port);
+   \`\`\`
+2. **Dynamic Port**: Vercel dynamically assigns the \`PORT\` environment variable (defaulting to 3000). Always read \`PORT\` via \`zest.zenv.getInt("PORT", u16)\`.
+3. **Database & Secrets**: Provide your production PostgreSQL connection string (such as Supabase, Neon, or AWS RDS pooler) as \`DATABASE_URL\` and \`JWT_SECRET\` in your Vercel Project Environment Variables.
+4. **Deploy Command**: Deploy directly via Vercel CLI:
+   \`\`\`bash
+   vercel --prod
+   \`\`\`
+
+---
+
+### 4. Production Reverse Proxy (Caddy / Nginx)
 Run Zest behind Caddy or Nginx for automated HTTPS certificates:
 
 #### Caddyfile Example:
@@ -1777,6 +1795,81 @@ api.example.com {
 \`\`\`
     `,
     codeExamples: [
+      {
+        title: 'Dockerfile.vercel (Production Multi-Stage for Vercel)',
+        language: 'dockerfile',
+        code: `# ====================================================================
+# Dockerfile.vercel: Production Container Build for Vercel Deployment
+# ====================================================================
+
+# Stage 1: Build binary with Zig & system dependencies
+FROM alpine:3.20 AS builder
+
+RUN apk add --no-cache \\
+    zig \\
+    gcc \\
+    musl-dev \\
+    sqlite-dev \\
+    postgresql-dev \\
+    git \\
+    ca-certificates
+
+WORKDIR /app
+
+# Cache package dependencies by copying build configs first
+COPY build.zig build.zig.zon ./
+RUN zig build --help > /dev/null 2>&1 || true
+
+# Copy source tree and compile optimized release binary
+COPY . .
+RUN zig build -Doptimize=ReleaseSafe
+
+# Stage 2: Minimal, secure runtime container
+FROM alpine:3.20 AS runner
+
+RUN apk add --no-cache \\
+    libsqlite3 \\
+    libpq \\
+    ca-certificates \\
+    tzdata
+
+WORKDIR /app
+
+# Copy compiled binary from builder stage
+COPY --from=builder /app/zig-out/bin/* /app/server
+
+# Create unprivileged service user
+RUN adduser -D -u 10001 appuser && \\
+    chown -R appuser:appuser /app
+
+USER appuser
+
+# Vercel assigns PORT (default 3000) and routes incoming traffic
+ENV HOST=0.0.0.0
+ENV PORT=3000
+EXPOSE 3000
+
+CMD ["/app/server"]`
+      },
+      {
+        title: 'vercel.json (Vercel Project Routing & Configuration)',
+        language: 'json',
+        code: `{
+  "version": 2,
+  "builds": [
+    {
+      "src": "Dockerfile.vercel",
+      "use": "@vercel/docker"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/"
+    }
+  ]
+}`
+      },
       {
         title: 'Systemd Service Unit (/etc/systemd/system/zest.service)',
         language: 'ini',
@@ -1791,7 +1884,7 @@ WorkingDirectory=/var/www/my-zest-api
 ExecStart=/var/www/my-zest-api/zig-out/bin/my-zest-api
 Restart=always
 RestartSec=3
-Environment=PORT=8000 DATABASE_URL=sqlite:production.db
+Environment=HOST=0.0.0.0 PORT=8000 DATABASE_URL=sqlite:production.db
 
 [Install]
 WantedBy=multi-user.target`
