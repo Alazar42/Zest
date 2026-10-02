@@ -93,15 +93,12 @@ pub fn logger(req: *Request, res: *Response) anyerror!bool {
 pub fn cors(comptime options: CorsOptions) MiddlewareFn {
     return struct {
         fn handle(req: *Request, res: *Response) anyerror!bool {
+            // Always add CORS headers
+            try res.setHeader("access-control-allow-origin", options.origin);
+            try res.setHeader("access-control-allow-methods", options.methods);
+            try res.setHeader("access-control-allow-headers", options.headers);
             if (req.method() == .OPTIONS) {
-                try res.send("", .{
-                    .status = .no_content,
-                    .extra_headers = &.{
-                        .{ .name = "access-control-allow-origin", .value = options.origin },
-                        .{ .name = "access-control-allow-methods", .value = options.methods },
-                        .{ .name = "access-control-allow-headers", .value = options.headers },
-                    },
-                });
+                try res.send("", .{ .status = .no_content });
                 return false; // Handled preflight
             }
             return true;
