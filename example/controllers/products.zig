@@ -14,22 +14,22 @@ pub fn getAll(req: *zest.Request, res: *zest.Response) !void {
         for (products) |*p| p.deinit();
         req.allocator.free(products);
     }
-    try res.jsonValue(products);
+    try res.json(products);
 }
 
 /// GET /api/v1/products/:id - Fetch single product by UUID
 pub fn getById(req: *zest.Request, res: *zest.Response) !void {
     const id = req.param("id") orelse {
-        try res.status(.bad_request, "{\"error\": \"Missing product ID\"}");
+        try res.status(.bad_request, .{ .@"error" = "Missing product ID" });
         return;
     };
 
     var found = try Product.model.find(&database.db, req.allocator, id);
     if (found) |*p| {
         defer p.deinit();
-        try res.jsonValue(p.value);
+        try res.json(p.value);
     } else {
-        try res.status(.not_found, "{\"error\": \"Product not found\"}");
+        try res.status(.not_found, .{ .@"error" = "Product not found" });
     }
 }
 
@@ -44,20 +44,20 @@ pub fn create(req: *zest.Request, res: *zest.Response) !void {
     }
 
     try Product.model.save(&database.db, req.allocator, &product);
-    const body = try std.fmt.allocPrint(req.allocator, "{{\"status\":\"created\",\"id\":\"{s}\"}}", .{product.id.?});
-    try res.status(.created, body);
+    try res.status(.created, .{ .status = "created", .id = product.id.? });
 }
 
 /// DELETE /api/v1/products/:id - Delete product by UUID
 pub fn deleteProduct(req: *zest.Request, res: *zest.Response) !void {
     const id = req.param("id") orelse {
-        try res.status(.bad_request, "{\"error\": \"Missing product ID\"}");
+        try res.status(.bad_request, .{ .@"error" = "Missing product ID" });
         return;
     };
 
     if (Product.model.delete(&database.db, id)) {
-        try res.json("{\"message\": \"Product deleted successfully\"}");
+        try res.json(.{ .message = "Product deleted successfully" });
     } else {
-        try res.status(.not_found, "{\"error\": \"Product not found\"}");
+        try res.status(.not_found, .{ .@"error" = "Product not found" });
     }
 }
+

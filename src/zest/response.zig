@@ -56,14 +56,62 @@ pub fn sendWithHeaders(self: *Self, content: []const u8, http_status: std.http.S
     });
 }
 
+fn isString(comptime T: type) bool {
+    switch (@typeInfo(T)) {
+        .pointer => |ptr| {
+            if (ptr.size == .slice) {
+                return ptr.child == u8;
+            } else if (ptr.size == .one) {
+                return switch (@typeInfo(ptr.child)) {
+                    .array => |arr| arr.child == u8,
+                    else => false,
+                };
+            }
+            return false;
+        },
+        .array => |arr| {
+            return arr.child == u8;
+        },
+        else => return false,
+    }
+}
+
+fn asStringSlice(val: anytype) []const u8 {
+    const T = @TypeOf(val);
+    if (comptime isString(T)) {
+        switch (@typeInfo(T)) {
+            .pointer => |ptr| {
+                if (ptr.size == .slice) {
+                    return val;
+                } else if (ptr.size == .one) {
+                    return val[0..];
+                }
+            },
+            .array => return val[0..],
+            else => unreachable,
+        }
+    }
+    unreachable;
+}
+
 /// Responds with text/plain content and HTTP 200 OK.
 pub fn text(self: *Self, content: []const u8) !void {
     try self.sendWithHeaders(content, .ok, "text/plain; charset=utf-8");
 }
 
-/// Responds with application/json raw string and HTTP 200 OK.
-pub fn json(self: *Self, content: []const u8) !void {
-    try self.sendWithHeaders(content, .ok, "application/json; charset=utf-8");
+/// Responds with application/json and HTTP 200 OK.
+/// Accepts either a raw JSON string/slice or any Zig struct, Model, or value to serialize.
+pub fn json(self: *Self, val: anytype) !void {
+    const T = @TypeOf(val);
+    if (comptime isString(T)) {
+        const slice = asStringSlice(val);
+        try self.sendWithHeaders(slice, .ok, "application/json; charset=utf-8");
+    } else {
+        const allocator = if (self.request) |r| r.allocator else std.heap.page_allocator;
+        const json_str = try serializeJson(allocator, val);
+        defer allocator.free(json_str);
+        try self.sendWithHeaders(json_str, .ok, "application/json; charset=utf-8");
+    }
 }
 
 fn isParsed(comptime T: type) bool {
@@ -126,11 +174,9 @@ pub fn serializeJson(allocator: std.mem.Allocator, val: anytype) ![]u8 {
 }
 
 /// Automatically serializes any Zig struct, Model, slice, Parsed(T), or value to JSON and responds with HTTP 200 OK.
+/// Provided for backwards compatibility with `res.json(val)`.
 pub fn jsonValue(self: *Self, val: anytype) !void {
-    const allocator = if (self.request) |r| r.allocator else std.heap.page_allocator;
-    const json_str = try serializeJson(allocator, val);
-    defer allocator.free(json_str);
-    try self.json(json_str);
+    try self.json(val);
 }
 
 /// Responds with text/html content and HTTP 200 OK.
@@ -139,8 +185,58 @@ pub fn html(self: *Self, content: []const u8) !void {
 }
 
 /// Responds with a custom status code and content.
-pub fn status(self: *Self, http_status: std.http.Status, content: []const u8) !void {
-    try self.sendWithHeaders(content, http_status, "text/plain; charset=utf-8");
+/// Accepts either a raw string (auto-detects JSON vs text/plain) or any Zig struct, Model, or value to serialize as JSON.
+pub fn status(self: *Self, http_status: std.http.Status, val: anytype) !void {
+    const T = @TypeOf(val);
+    if (comptime isString(T)) {
+        const slice = asStringSlice(val);
+        const trimmed = std.mem.trim(u8, slice, " \t\r\n");
+        const content_type = if (trimmed.len > 0 and (trimmed[0] == '{' or trimmed[0] == '['))
+            "application/json; charset=utf-8"
+        else
+            "text/plain; charset=utf-8";
+        try self.sendWithHeaders(slice, http_status, content_type);
+    } else {
+        const allocator = if (self.request) |r| r.allocator else std.heap.page_allocator;
+        const json_str = try serializeJson(allocator, val);
+        defer allocator.free(json_str);
+        try self.sendWithHeaders(json_str, http_status, "application/json; charset=utf-8");
+    }
+}
+
+/// Sends an error JSON object `{"error": "..."}` with the specified HTTP status code.
+pub fn err(self: *Self, http_status: std.http.Status, message: []const u8) !void {
+    try self.status(http_status, .{ .@"error" = message });
+}
+
+/// Responds with HTTP 400 Bad Request.
+pub fn badRequest(self: *Self, val: anytype) !void {
+    try self.status(.bad_request, val);
+}
+
+/// Responds with HTTP 404 Not Found.
+pub fn notFound(self: *Self, val: anytype) !void {
+    try self.status(.not_found, val);
+}
+
+/// Responds with HTTP 401 Unauthorized.
+pub fn unauthorized(self: *Self, val: anytype) !void {
+    try self.status(.unauthorized, val);
+}
+
+/// Responds with HTTP 403 Forbidden.
+pub fn forbidden(self: *Self, val: anytype) !void {
+    try self.status(.forbidden, val);
+}
+
+/// Responds with HTTP 201 Created.
+pub fn created(self: *Self, val: anytype) !void {
+    try self.status(.created, val);
+}
+
+/// Responds with HTTP 500 Internal Server Error.
+pub fn internalServerError(self: *Self, val: anytype) !void {
+    try self.status(.internal_server_error, val);
 }
 
 /// Sends an HTTP 302 Found redirect to the specified URL location.

@@ -5,7 +5,7 @@ const Product = @import("models/product.zig").Product;
 const products_routes = @import("routes/products.zig");
 
 fn welcome(res: *zest.Response) !void {
-    try res.json("{\"message\": \"Welcome to Zest API! Visit /docs for Swagger UI.\"}");
+    try res.json(.{ .message = "Welcome to Zest API! Visit /docs for Swagger UI." });
 }
 
 pub fn main() !void {

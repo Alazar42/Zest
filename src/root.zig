@@ -821,6 +821,22 @@ test "Response.serializeJson with Parsed(T) and slice of Parsed(T)" {
     try testing.expect(std.mem.indexOf(u8, q_json, "ItemA") != null);
 }
 
+test "Response serialization with Zig anonymous struct literals" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Test error object: .{ .@"error" = "Missing product ID" }
+    const err_json = try Response.serializeJson(gpa, .{ .@"error" = "Missing product ID" });
+    defer gpa.free(err_json);
+    try testing.expectEqualStrings("{\"error\":\"Missing product ID\"}", err_json);
+
+    // Test multi-field object: .{ .status = "created", .id = 42 }
+    const res_json = try Response.serializeJson(gpa, .{ .status = "created", .id = @as(u32, 42) });
+    defer gpa.free(res_json);
+    try testing.expect(std.mem.indexOf(u8, res_json, "\"status\":\"created\"") != null);
+    try testing.expect(std.mem.indexOf(u8, res_json, "\"id\":42") != null);
+}
+
 test "uuid v4 generation and formatting" {
     const testing = std.testing;
     const gpa = testing.allocator;
