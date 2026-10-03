@@ -295,12 +295,9 @@ fn dispatchRequest(self: *Self, request: *std.http.Server.Request) void {
     self.handleInternal(&req, &res, request, req.path()) catch |err| {
         res.status_code = .internal_server_error;
         std.log.err("Error handling request '{s}': {t}", .{ req.target(), err });
-        request.respond("500 Internal Server Error\n", .{
-            .status = .internal_server_error,
-            .extra_headers = &.{
-                .{ .name = "content-type", .value = "text/plain; charset=utf-8" },
-            },
-        }) catch {};
+        if (!res.sent) {
+            res.sendWithHeaders("500 Internal Server Error\n", .internal_server_error, "text/plain; charset=utf-8") catch {};
+        }
     };
 }
 
@@ -345,11 +342,8 @@ fn handleInternal(self: *Self, req: *Request, res: *Response, request: *std.http
     }
 
     // Route not found -> 404
-    res.status_code = .not_found;
-    try request.respond("404 Not Found\n", .{
-        .status = .not_found,
-        .extra_headers = &.{
-            .{ .name = "content-type", .value = "text/plain; charset=utf-8" },
-        },
-    });
+    if (!res.sent) {
+        res.status_code = .not_found;
+        try res.sendWithHeaders("404 Not Found\n", .not_found, "text/plain; charset=utf-8");
+    }
 }

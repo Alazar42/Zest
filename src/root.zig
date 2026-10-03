@@ -1123,3 +1123,255 @@ test "Relational relationships hasMany and belongsTo in SQLite" {
         try testing.expectEqualStrings("Ada Lovelace", author_opt.?.value.name);
     }
 }
+
+test "CORS origin pattern matching and validation" {
+    const testing = std.testing;
+
+    // 1. Wildcard "*" matches everything
+    try testing.expect(middleware.matchOriginPattern("*", "https://anything.com"));
+    try testing.expect(middleware.matchOriginPattern("*", "http://localhost:3000"));
+
+    // 2. Exact matches
+    try testing.expect(middleware.matchOriginPattern("https://example.com", "https://example.com"));
+    try testing.expect(!middleware.matchOriginPattern("https://example.com", "http://example.com"));
+    try testing.expect(!middleware.matchOriginPattern("https://example.com", "https://other.com"));
+
+    // 3. Port wildcards (e.g. localhost development on any port)
+    try testing.expect(middleware.matchOriginPattern("http://localhost:*", "http://localhost:3000"));
+    try testing.expect(middleware.matchOriginPattern("http://localhost:*", "http://localhost:5173"));
+    try testing.expect(middleware.matchOriginPattern("http://localhost:*", "http://localhost:8080"));
+    try testing.expect(!middleware.matchOriginPattern("http://localhost:*", "http://example.com"));
+    try testing.expect(!middleware.matchOriginPattern("http://localhost:*", "https://localhost:3000"));
+
+    // 4. Subdomain wildcards
+    try testing.expect(middleware.matchOriginPattern("*.example.com", "https://api.example.com"));
+    try testing.expect(middleware.matchOriginPattern("*.example.com", "http://dashboard.example.com"));
+    try testing.expect(middleware.matchOriginPattern("https://*.example.com", "https://api.example.com"));
+    try testing.expect(!middleware.matchOriginPattern("https://*.example.com", "http://api.example.com"));
+    try testing.expect(!middleware.matchOriginPattern("https://*.example.com", "https://evil-example.com"));
+
+    // 5. isOriginAllowed with whitelist
+    const opts = middleware.CorsOptions{
+        .origins = &.{ "http://localhost:3000", "http://localhost:5173", "https://*.mickycodes.com" },
+        .allowCredentials = true,
+    };
+    try testing.expect(middleware.isOriginAllowed(opts, "http://localhost:3000"));
+    try testing.expect(middleware.isOriginAllowed(opts, "http://localhost:5173"));
+    try testing.expect(middleware.isOriginAllowed(opts, "https://api.mickycodes.com"));
+    try testing.expect(middleware.isOriginAllowed(opts, "https://app.mickycodes.com"));
+    try testing.expect(!middleware.isOriginAllowed(opts, "http://localhost:8000"));
+    try testing.expect(!middleware.isOriginAllowed(opts, "https://unauthorized.org"));
+}
+
+test "Response header deduplication, Vary merging, and Set-Cookie preservation" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var res = Response{
+        .server_request = undefined,
+        .request = null,
+        .headers = .empty,
+    };
+    defer res.headers.deinit(gpa);
+
+    // 1. setHeader replaces duplicates
+    try res.setHeader("X-Custom", "First");
+    try testing.expectEqualStrings("First", res.getHeader("x-custom").?);
+    try testing.expectEqual(@as(usize, 1), res.headers.items.len);
+
+    try res.setHeader("x-custom", "Second");
+    try testing.expectEqualStrings("Second", res.getHeader("X-CUSTOM").?);
+    try testing.expectEqual(@as(usize, 1), res.headers.items.len); // Must not duplicate!
+
+    // 2. set-cookie preserves multiple values
+    try res.setHeader("set-cookie", "session_id=123");
+    try res.setHeader("set-cookie", "theme=dark");
+    var cookie_count: usize = 0;
+    for (res.headers.items) |h| {
+        if (std.ascii.eqlIgnoreCase(h.name, "set-cookie")) cookie_count += 1;
+    }
+    try testing.expectEqual(@as(usize, 2), cookie_count);
+
+    // 3. Vary header merges
+    try res.setHeader("vary", "Origin");
+    try res.setHeader("vary", "Accept-Encoding");
+    const vary_val = res.getHeader("vary").?;
+    try testing.expect(std.mem.indexOf(u8, vary_val, "Origin") != null);
+    try testing.expect(std.mem.indexOf(u8, vary_val, "Accept-Encoding") != null);
+}
+
+test "CORS preflight and actual request integration over TCP" {
+    const testing = std.testing;
+
+    const port: u16 = 19877;
+    var app = init("127.0.0.1", port);
+    defer app.deinit();
+
+    try app.use(middleware.cors(.{
+        .origins = &.{ "http://localhost:3000", "http://localhost:5173", "https://*.mickycodes.com" },
+        .allowCredentials = true,
+        .maxAge = 3600,
+    }));
+
+    try app.get("/api/v1/test", struct {
+        fn h(res: *Response) anyerror!void {
+            try res.json(.{ .message = "success" });
+        }
+    }.h);
+
+    try app.get("/api/v1/crash", struct {
+        fn h(_: *Response) anyerror!void {
+            return error.IntentionalFailure;
+        }
+    }.h);
+
+    const ServerRunner = struct {
+        fn run(a: *App) void {
+            a.serve() catch {};
+        }
+    };
+
+    const server_thread = try std.Thread.spawn(.{}, ServerRunner.run, .{&app});
+    defer {
+        app.stop();
+        // Connect to wake up accept loop if needed
+        const addr = std.net.Address.parseIp4("127.0.0.1", port) catch unreachable;
+        if (std.net.tcpConnectToAddress(addr)) |s| {
+            s.close();
+        } else |_| {}
+        server_thread.join();
+    }
+
+    // Wait briefly for server socket to bind and start listening
+    var req_ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 50_000_000 };
+    _ = std.os.linux.nanosleep(&req_ts, null);
+
+    const net = std.Io.net;
+    const client = struct {
+        fn request(io: std.Io, req_bytes: []const u8, buf: []u8) ![]const u8 {
+            const addr = try net.IpAddress.parse("127.0.0.1", port);
+            var stream = try addr.connect(io, .{});
+            defer stream.close(io);
+
+            var send_buf: [1024]u8 = undefined;
+            var writer = stream.writer(io, &send_buf);
+            try writer.interface.writeAll(req_bytes);
+            try writer.interface.flush();
+
+            var recv_buf: [1024]u8 = undefined;
+            var reader = stream.reader(io, &recv_buf);
+
+            var total: usize = 0;
+            while (total < buf.len) {
+                const read_bytes = reader.interface.read(buf[total..]) catch |err| switch (err) {
+                    error.ConnectionResetByPeer => break,
+                    else => return err,
+                };
+                if (read_bytes == 0) break;
+                total += read_bytes;
+                if (std.mem.indexOf(u8, buf[0..total], "\r\n\r\n")) |hdr_end| {
+                    if (std.mem.indexOf(u8, buf[0..hdr_end], "204 No Content") != null) break;
+                    if (std.mem.indexOf(u8, buf[0..hdr_end], "content-length: 0") != null) break;
+                    if (std.mem.indexOf(u8, buf[0..hdr_end], "content-length: ") != null) {
+                        const cl_idx = std.mem.indexOf(u8, buf[0..hdr_end], "content-length: ").? + 16;
+                        const cl_end = std.mem.indexOf(u8, buf[cl_idx..hdr_end], "\r\n").? + cl_idx;
+                        const len = try std.fmt.parseInt(usize, buf[cl_idx..cl_end], 10);
+                        if (total >= hdr_end + 4 + len) break;
+                    }
+                }
+            }
+            return buf[0..total];
+        }
+    };
+
+    var resp_buf: [4096]u8 = undefined;
+
+    // Test 1: Preflight OPTIONS request from allowed origin
+    {
+        const preflight =
+            "OPTIONS /api/v1/test HTTP/1.1\r\n" ++
+            "Host: 127.0.0.1:19877\r\n" ++
+            "Origin: http://localhost:5173\r\n" ++
+            "Access-Control-Request-Method: POST\r\n" ++
+            "Access-Control-Request-Headers: authorization, content-type\r\n" ++
+            "Connection: close\r\n\r\n";
+
+        const res_str = try client.request(preflight, &resp_buf);
+        try testing.expect(std.mem.indexOf(u8, res_str, "204 No Content") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: http://localhost:5173") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-credentials: true") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-methods: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-headers: authorization, content-type") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-max-age: 3600") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "vary: Origin") != null);
+    }
+
+    // Test 2: Preflight OPTIONS request from wildcard subdomain
+    {
+        const preflight =
+            "OPTIONS /api/v1/test HTTP/1.1\r\n" ++
+            "Host: 127.0.0.1:19877\r\n" ++
+            "Origin: https://dashboard.mickycodes.com\r\n" ++
+            "Access-Control-Request-Method: GET\r\n" ++
+            "Connection: close\r\n\r\n";
+
+        const res_str = try client.request(preflight, &resp_buf);
+        try testing.expect(std.mem.indexOf(u8, res_str, "204 No Content") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: https://dashboard.mickycodes.com") != null);
+    }
+
+    // Test 3: Preflight OPTIONS request from unauthorized origin -> 403 Forbidden without allow-origin
+    {
+        const preflight =
+            "OPTIONS /api/v1/test HTTP/1.1\r\n" ++
+            "Host: 127.0.0.1:19877\r\n" ++
+            "Origin: http://malicious-site.com\r\n" ++
+            "Access-Control-Request-Method: GET\r\n" ++
+            "Connection: close\r\n\r\n";
+
+        const res_str = try client.request(preflight, &resp_buf);
+        try testing.expect(std.mem.indexOf(u8, res_str, "403 Forbidden") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin") == null);
+    }
+
+    // Test 4: Actual GET request with Origin
+    {
+        const req =
+            "GET /api/v1/test HTTP/1.1\r\n" ++
+            "Host: 127.0.0.1:19877\r\n" ++
+            "Origin: http://localhost:5173\r\n" ++
+            "Connection: close\r\n\r\n";
+
+        const res_str = try client.request(req, &resp_buf);
+        try testing.expect(std.mem.indexOf(u8, res_str, "200 OK") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: http://localhost:5173") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "{\"message\":\"success\"}") != null);
+    }
+
+    // Test 5: Route not found (404) preserves CORS header so browser does not throw CORS error
+    {
+        const req =
+            "GET /api/v1/non_existent_route HTTP/1.1\r\n" ++
+            "Host: 127.0.0.1:19877\r\n" ++
+            "Origin: http://localhost:5173\r\n" ++
+            "Connection: close\r\n\r\n";
+
+        const res_str = try client.request(req, &resp_buf);
+        try testing.expect(std.mem.indexOf(u8, res_str, "404 Not Found") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: http://localhost:5173") != null);
+    }
+
+    // Test 6: Route crash (500) preserves CORS header
+    {
+        const req =
+            "GET /api/v1/crash HTTP/1.1\r\n" ++
+            "Host: 127.0.0.1:19877\r\n" ++
+            "Origin: http://localhost:5173\r\n" ++
+            "Connection: close\r\n\r\n";
+
+        const res_str = try client.request(req, &resp_buf);
+        try testing.expect(std.mem.indexOf(u8, res_str, "500 Internal Server Error") != null);
+        try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: http://localhost:5173") != null);
+    }
+}
+

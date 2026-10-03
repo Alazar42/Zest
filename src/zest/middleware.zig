@@ -5,12 +5,75 @@ const Response = @import("response.zig");
 pub const MiddlewareFn = *const fn (req: *Request, res: *Response) anyerror!bool;
 
 pub const CorsOptions = struct {
+    /// Single allowed origin or pattern (e.g. "*", "https://example.com", "http://localhost:*"). Default: "*".
     origin: []const u8 = "*",
+
+    /// List of allowed origins or wildcard patterns (e.g. &.{ "http://localhost:3000", "http://localhost:5173", "https://*.example.com" }).
+    /// If non-empty, incoming request origins are matched against this whitelist.
+    origins: []const []const u8 = &.{},
+
+    /// Optional custom function for programmatic dynamic origin validation.
+    allowOriginFn: ?*const fn (origin: []const u8) bool = null,
+
+    /// Allowed HTTP methods for CORS requests.
+    /// Default: "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS".
     methods: []const u8 = "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
-    headers: []const u8 = "content-type, authorization, accept",
-    allowCredentials: bool = false,
+
+    /// Allowed HTTP request headers.
+    /// Default: "*" (automatically echoes requested headers during preflight).
+    /// Can also be a comma-separated list like "Content-Type, Authorization, X-Requested-With".
+    headers: []const u8 = "*",
+
+    /// Headers that browsers are permitted to access from the response.
+    /// Default: "*" (all response headers exposed) or custom list like "Content-Length, Content-Disposition, X-Total-Count".
     exposeHeaders: []const u8 = "*",
+
+    /// Indicates whether the request can be made with credentials (cookies, authorization headers, TLS client certs).
+    /// Default: false.
+    /// In accordance with W3C CORS / Fetch specifications, when credentials are true,
+    /// Access-Control-Allow-Origin will NEVER be "*", but rather the matching request origin, and Vary: Origin is added.
+    allowCredentials: bool = false,
+
+    /// Number of seconds the results of a preflight request can be cached by browsers and proxies.
+    /// Default: 86400 (24 hours). If null or 0, no max-age header is emitted.
+    maxAge: ?u32 = 86400,
+
+    /// HTTP status code to return for successful preflight OPTIONS requests.
+    /// Default: .no_content (204). Can be set to .ok (200) for legacy browser support.
+    optionsSuccessStatus: std.http.Status = .no_content,
 };
+
+/// Matches an origin string against an allowed origin pattern.
+/// Supported patterns:
+/// - `"*"`: matches any origin.
+/// - Exact match: `"https://example.com"` == `"https://example.com"`.
+/// - Wildcard in pattern: `"http://localhost:*"` matches any port on localhost like `"http://localhost:3000"` or `"http://localhost:5173"`.
+/// - Subdomain wildcard: `"*.example.com"` or `"https://*.example.com"` matches `"https://api.example.com"`.
+pub fn matchOriginPattern(pattern: []const u8, origin: []const u8) bool {
+    if (std.mem.eql(u8, pattern, "*")) return true;
+    if (std.mem.eql(u8, pattern, origin)) return true;
+    if (std.mem.indexOfScalar(u8, pattern, '*')) |star_idx| {
+        const prefix = pattern[0..star_idx];
+        const suffix = pattern[star_idx + 1 ..];
+        if (origin.len < prefix.len + suffix.len) return false;
+        return std.mem.startsWith(u8, origin, prefix) and std.mem.endsWith(u8, origin, suffix);
+    }
+    return false;
+}
+
+/// Checks whether an origin is allowed according to the configured CorsOptions.
+pub fn isOriginAllowed(comptime opts: CorsOptions, origin: []const u8) bool {
+    if (opts.allowOriginFn) |func| {
+        if (func(origin)) return true;
+    }
+    if (opts.origins.len > 0) {
+        for (opts.origins) |pattern| {
+            if (matchOriginPattern(pattern, origin)) return true;
+        }
+        return false;
+    }
+    return matchOriginPattern(opts.origin, origin);
+}
 
 /// Formats the HTTP method with distinct ANSI colors:
 /// - GET: Bold Green
@@ -90,34 +153,133 @@ pub fn logger(req: *Request, res: *Response) anyerror!bool {
     return true;
 }
 
-/// Creates a CORS middleware with custom or default options.
-/// Automatically handles OPTIONS preflight requests by replying with 204 No Content.
+/// Creates a production-grade CORS middleware with custom or default options.
+/// Conforms strictly to W3C Cross-Origin Resource Sharing (CORS) and WHATWG Fetch specifications:
+/// - Automatically handles OPTIONS preflight requests by replying with 204 No Content (configurable).
+/// - Preserves and merges all headers through Response.send() and Response.sendWithHeaders().
+/// - Supports origin whitelisting with wildcard subdomains and ports (*.example.com, http://localhost:*).
+/// - Enforces credential safety: never emits wildcard '*' origin when allowCredentials is true.
+/// - Dynamically reflects Access-Control-Request-Headers when headers = "*" for credential compatibility.
+/// - Adds Vary: Origin and preflight Vary headers to prevent proxy/CDN cache poisoning.
 pub fn cors(comptime options: CorsOptions) MiddlewareFn {
+    const max_age_str: ?[]const u8 = if (options.maxAge) |age|
+        if (age > 0) std.fmt.comptimePrint("{d}", .{age}) else null
+    else
+        null;
+
     return struct {
         fn handle(req: *Request, res: *Response) anyerror!bool {
-            // Determine the appropriate origin header value.
-            var origin_val: []const u8 = options.origin;
-            if (std.mem.eql(u8, options.origin, "*")) {
-                // If wildcard, echo back the request's Origin header if present.
-                if (req.getHeader("origin")) |hdr| {
-                    origin_val = hdr;
+            const maybe_origin = req.getHeader("origin");
+            const is_options = (req.method() == .OPTIONS);
+
+            if (maybe_origin) |origin_hdr| {
+                const allowed = isOriginAllowed(options, origin_hdr);
+
+                if (is_options) {
+                    if (!allowed) {
+                        try res.send("", .{ .status = .forbidden });
+                        return false;
+                    }
+
+                    const allow_origin = if (options.allowCredentials)
+                        origin_hdr
+                    else if (options.origins.len > 0)
+                        origin_hdr
+                    else if (std.mem.eql(u8, options.origin, "*"))
+                        "*"
+                    else
+                        origin_hdr;
+
+                    try res.setHeader("access-control-allow-origin", allow_origin);
+                    try res.setHeader("access-control-allow-methods", options.methods);
+
+                    // Dynamic header reflection
+                    if (std.mem.eql(u8, options.headers, "*")) {
+                        if (req.getHeader("access-control-request-headers")) |req_hdrs| {
+                            try res.setHeader("access-control-allow-headers", req_hdrs);
+                        } else {
+                            if (options.allowCredentials) {
+                                try res.setHeader("access-control-allow-headers", "Accept, Authorization, Content-Type, Origin, X-Requested-With");
+                            } else {
+                                try res.setHeader("access-control-allow-headers", "*");
+                            }
+                        }
+                    } else {
+                        try res.setHeader("access-control-allow-headers", options.headers);
+                    }
+
+                    if (options.allowCredentials) {
+                        try res.setHeader("access-control-allow-credentials", "true");
+                    }
+
+                    if (options.exposeHeaders.len > 0) {
+                        try res.setHeader("access-control-expose-headers", options.exposeHeaders);
+                    }
+
+                    if (max_age_str) |age_val| {
+                        try res.setHeader("access-control-max-age", age_val);
+                    }
+
+                    try res.setHeader("vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
+                    try res.send("", .{ .status = options.optionsSuccessStatus });
+                    return false;
+                }
+
+                // Actual request (GET, POST, PUT, DELETE, PATCH, etc.)
+                if (allowed) {
+                    const allow_origin = if (options.allowCredentials)
+                        origin_hdr
+                    else if (options.origins.len > 0)
+                        origin_hdr
+                    else if (std.mem.eql(u8, options.origin, "*"))
+                        "*"
+                    else
+                        origin_hdr;
+
+                    try res.setHeader("access-control-allow-origin", allow_origin);
+
+                    if (options.allowCredentials) {
+                        try res.setHeader("access-control-allow-credentials", "true");
+                    }
+
+                    if (options.exposeHeaders.len > 0) {
+                        try res.setHeader("access-control-expose-headers", options.exposeHeaders);
+                    }
+
+                    if (!std.mem.eql(u8, allow_origin, "*") or options.allowCredentials) {
+                        try res.setHeader("vary", "Origin");
+                    }
+                }
+                return true;
+            }
+
+            // Request without Origin header
+            if (is_options) {
+                if (std.mem.eql(u8, options.origin, "*") and options.origins.len == 0 and !options.allowCredentials) {
+                    try res.setHeader("access-control-allow-origin", "*");
+                    try res.setHeader("access-control-allow-methods", options.methods);
+                    try res.setHeader("access-control-allow-headers", if (std.mem.eql(u8, options.headers, "*")) "*" else options.headers);
+                    if (options.exposeHeaders.len > 0) {
+                        try res.setHeader("access-control-expose-headers", options.exposeHeaders);
+                    }
+                    if (max_age_str) |age_val| {
+                        try res.setHeader("access-control-max-age", age_val);
+                    }
+                    try res.setHeader("vary", "Origin");
+                    try res.send("", .{ .status = options.optionsSuccessStatus });
+                    return false;
+                }
+                return true;
+            }
+
+            // Normal non-CORS request without Origin header
+            if (std.mem.eql(u8, options.origin, "*") and options.origins.len == 0 and !options.allowCredentials) {
+                try res.setHeader("access-control-allow-origin", "*");
+                if (options.exposeHeaders.len > 0) {
+                    try res.setHeader("access-control-expose-headers", options.exposeHeaders);
                 }
             }
-            // Always add CORS headers
-            try res.setHeader("access-control-allow-origin", origin_val);
-            try res.setHeader("access-control-allow-methods", options.methods);
-            try res.setHeader("access-control-allow-headers", options.headers);
-            try res.setHeader("access-control-expose-headers", options.exposeHeaders);
-            if (options.allowCredentials) {
-                try res.setHeader("access-control-allow-credentials", "true");
-            }
-            // Handle preflight OPTIONS request
-            if (req.method() == .OPTIONS) {
-                // Include max age for caching preflight response
-                try res.setHeader("access-control-max-age", "86400");
-                try res.send("", .{ .status = .no_content });
-                return false; // Preflight handled
-            }
+
             return true;
         }
     }.handle;
