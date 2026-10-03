@@ -4,6 +4,7 @@ pub const Cookie = @import("cookie.zig");
 
 server_request: *std.http.Server.Request,
 request: ?*Request = null,
+allocator: std.mem.Allocator = std.heap.page_allocator,
 headers: std.ArrayList(std.http.Header) = .empty,
 status_code: std.http.Status = .ok,
 log_enabled: bool = false,
@@ -13,15 +14,12 @@ const Self = @This();
 
 /// Releases any buffered header allocations.
 pub fn deinit(self: *Self) void {
-    if (self.request) |r| {
-        self.headers.deinit(r.allocator);
-    }
+    self.headers.deinit(self.allocator);
 }
 
 /// Sets an HTTP response header. Replaces any existing header with the same name (case-insensitive),
 /// except for "set-cookie", which allows multiple entries.
 pub fn setHeader(self: *Self, name: []const u8, value: []const u8) !void {
-    const allocator = if (self.request) |r| r.allocator else std.heap.page_allocator;
     if (!std.ascii.eqlIgnoreCase(name, "set-cookie")) {
         for (self.headers.items) |*h| {
             if (std.ascii.eqlIgnoreCase(h.name, name)) {
@@ -30,13 +28,12 @@ pub fn setHeader(self: *Self, name: []const u8, value: []const u8) !void {
             }
         }
     }
-    try self.headers.append(allocator, .{ .name = name, .value = value });
+    try self.headers.append(self.allocator, .{ .name = name, .value = value });
 }
 
 /// Appends an HTTP response header without replacing existing entries.
 pub fn appendHeader(self: *Self, name: []const u8, value: []const u8) !void {
-    const allocator = if (self.request) |r| r.allocator else std.heap.page_allocator;
-    try self.headers.append(allocator, .{ .name = name, .value = value });
+    try self.headers.append(self.allocator, .{ .name = name, .value = value });
 }
 
 /// Retrieves the value of a buffered response header by name (case-insensitive).
@@ -51,8 +48,7 @@ pub fn getHeader(self: *const Self, name: []const u8) ?[]const u8 {
 
 /// Sets a Set-Cookie header using the Cookie configuration.
 pub fn setCookie(self: *Self, c: Cookie) !void {
-    const allocator = if (self.request) |r| r.allocator else std.heap.page_allocator;
-    const cookie_str = try c.serialize(allocator);
+    const cookie_str = try c.serialize(self.allocator);
     try self.setHeader("set-cookie", cookie_str);
 }
 
@@ -60,9 +56,8 @@ pub fn setCookie(self: *Self, c: Cookie) !void {
 pub fn sendWithHeaders(self: *Self, content: []const u8, http_status: std.http.Status, content_type: []const u8) !void {
     self.status_code = http_status;
     self.sent = true;
-    const allocator = if (self.request) |r| r.allocator else std.heap.page_allocator;
     var out_headers: std.ArrayList(std.http.Header) = .empty;
-    defer out_headers.deinit(allocator);
+    defer out_headers.deinit(self.allocator);
 
     // Check if content-type was already overridden in headers
     var has_content_type = false;
@@ -73,9 +68,9 @@ pub fn sendWithHeaders(self: *Self, content: []const u8, http_status: std.http.S
         }
     }
     if (!has_content_type and content_type.len > 0) {
-        try out_headers.append(allocator, .{ .name = "content-type", .value = content_type });
+        try out_headers.append(self.allocator, .{ .name = "content-type", .value = content_type });
     }
-    try out_headers.appendSlice(allocator, self.headers.items);
+    try out_headers.appendSlice(self.allocator, self.headers.items);
 
     try self.server_request.respond(content, .{
         .status = http_status,
@@ -277,13 +272,12 @@ pub fn redirect(self: *Self, location: []const u8) !void {
 pub fn send(self: *Self, content: []const u8, options: std.http.Server.Request.RespondOptions) !void {
     self.status_code = options.status;
     self.sent = true;
-    const allocator = if (self.request) |r| r.allocator else std.heap.page_allocator;
     var out_headers: std.ArrayList(std.http.Header) = .empty;
-    defer out_headers.deinit(allocator);
+    defer out_headers.deinit(self.allocator);
 
-    try out_headers.appendSlice(allocator, self.headers.items);
+    try out_headers.appendSlice(self.allocator, self.headers.items);
     if (options.extra_headers.len > 0) {
-        try out_headers.appendSlice(allocator, options.extra_headers);
+        try out_headers.appendSlice(self.allocator, options.extra_headers);
     }
     var opts = options;
     opts.extra_headers = out_headers.items;

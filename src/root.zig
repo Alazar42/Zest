@@ -1202,6 +1202,7 @@ test "Response header deduplication, Vary merging, and Set-Cookie preservation" 
 
 test "CORS preflight and actual request integration over TCP" {
     const testing = std.testing;
+    const linux = std.os.linux;
 
     const port: u16 = 19877;
     var app = init("127.0.0.1", port);
@@ -1234,59 +1235,69 @@ test "CORS preflight and actual request integration over TCP" {
     const server_thread = try std.Thread.spawn(.{}, ServerRunner.run, .{&app});
     defer {
         app.stop();
-        // Connect to wake up accept loop if needed
-        const addr = std.net.Address.parseIp4("127.0.0.1", port) catch unreachable;
-        if (std.net.tcpConnectToAddress(addr)) |s| {
-            s.close();
-        } else |_| {}
+        // Raw wake-up connect so accept() loop unblocks
+        const wake_fd = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0);
+        if (@as(isize, @bitCast(wake_fd)) > 0) {
+            const wake_addr = linux.sockaddr.in{
+                .port = std.mem.nativeToBig(u16, port),
+                .addr = std.mem.nativeToBig(u32, 0x7f000001), // 127.0.0.1
+            };
+            _ = linux.connect(@intCast(wake_fd), @ptrCast(&wake_addr), @sizeOf(linux.sockaddr.in));
+            _ = linux.close(@intCast(wake_fd));
+        }
         server_thread.join();
     }
 
-    // Wait briefly for server socket to bind and start listening
-    var req_ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 50_000_000 };
-    _ = std.os.linux.nanosleep(&req_ts, null);
+    // Wait for the server to start
+    var ts = linux.timespec{ .sec = 0, .nsec = 80_000_000 };
+    _ = linux.nanosleep(&ts, null);
 
-    const net = std.Io.net;
-    const client = struct {
-        fn request(io: std.Io, req_bytes: []const u8, buf: []u8) ![]const u8 {
-            const addr = try net.IpAddress.parse("127.0.0.1", port);
-            var stream = try addr.connect(io, .{});
-            defer stream.close(io);
+    // Raw HTTP helper: opens a TCP socket, sends request, reads response
+    const doRequest = struct {
+        fn call(req_bytes: []const u8, buf: []u8) ![]const u8 {
+            const lnx = std.os.linux;
+            const fd = lnx.socket(lnx.AF.INET, lnx.SOCK.STREAM | lnx.SOCK.CLOEXEC, 0);
+            if (@as(isize, @bitCast(fd)) < 0) return error.SocketFailed;
+            defer _ = lnx.close(@intCast(fd));
 
-            var send_buf: [1024]u8 = undefined;
-            var writer = stream.writer(io, &send_buf);
-            try writer.interface.writeAll(req_bytes);
-            try writer.interface.flush();
+            const srv_addr = lnx.sockaddr.in{
+                .port = std.mem.nativeToBig(u16, port),
+                .addr = std.mem.nativeToBig(u32, 0x7f000001),
+            };
+            const rc = lnx.connect(@intCast(fd), @ptrCast(&srv_addr), @sizeOf(lnx.sockaddr.in));
+            if (@as(isize, @bitCast(rc)) < 0) return error.ConnectFailed;
 
-            var recv_buf: [1024]u8 = undefined;
-            var reader = stream.reader(io, &recv_buf);
+            _ = lnx.write(@intCast(fd), req_bytes.ptr, req_bytes.len);
+
+            // Shutdown write half so server sees EOF and flushes
+            _ = lnx.shutdown(@intCast(fd), linux.SHUT.WR);
 
             var total: usize = 0;
             while (total < buf.len) {
-                const read_bytes = reader.interface.read(buf[total..]) catch |err| switch (err) {
-                    error.ConnectionResetByPeer => break,
-                    else => return err,
-                };
-                if (read_bytes == 0) break;
-                total += read_bytes;
+                const n = lnx.read(@intCast(fd), buf.ptr + total, buf.len - total);
+                const n_signed = @as(isize, @bitCast(n));
+                if (n_signed <= 0) break;
+                total += @intCast(n_signed);
                 if (std.mem.indexOf(u8, buf[0..total], "\r\n\r\n")) |hdr_end| {
                     if (std.mem.indexOf(u8, buf[0..hdr_end], "204 No Content") != null) break;
+                    if (std.mem.indexOf(u8, buf[0..hdr_end], "403 Forbidden") != null) break;
                     if (std.mem.indexOf(u8, buf[0..hdr_end], "content-length: 0") != null) break;
                     if (std.mem.indexOf(u8, buf[0..hdr_end], "content-length: ") != null) {
                         const cl_idx = std.mem.indexOf(u8, buf[0..hdr_end], "content-length: ").? + 16;
-                        const cl_end = std.mem.indexOf(u8, buf[cl_idx..hdr_end], "\r\n").? + cl_idx;
-                        const len = try std.fmt.parseInt(usize, buf[cl_idx..cl_end], 10);
-                        if (total >= hdr_end + 4 + len) break;
+                        if (std.mem.indexOf(u8, buf[cl_idx..hdr_end], "\r\n")) |cl_len| {
+                            const len = std.fmt.parseInt(usize, buf[cl_idx .. cl_idx + cl_len], 10) catch 0;
+                            if (total >= hdr_end + 4 + len) break;
+                        }
                     }
                 }
             }
             return buf[0..total];
         }
-    };
+    }.call;
 
     var resp_buf: [4096]u8 = undefined;
 
-    // Test 1: Preflight OPTIONS request from allowed origin
+    // Test 1: Preflight OPTIONS from allowed origin
     {
         const preflight =
             "OPTIONS /api/v1/test HTTP/1.1\r\n" ++
@@ -1296,7 +1307,7 @@ test "CORS preflight and actual request integration over TCP" {
             "Access-Control-Request-Headers: authorization, content-type\r\n" ++
             "Connection: close\r\n\r\n";
 
-        const res_str = try client.request(preflight, &resp_buf);
+        const res_str = try doRequest(preflight, &resp_buf);
         try testing.expect(std.mem.indexOf(u8, res_str, "204 No Content") != null);
         try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: http://localhost:5173") != null);
         try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-credentials: true") != null);
@@ -1306,7 +1317,7 @@ test "CORS preflight and actual request integration over TCP" {
         try testing.expect(std.mem.indexOf(u8, res_str, "vary: Origin") != null);
     }
 
-    // Test 2: Preflight OPTIONS request from wildcard subdomain
+    // Test 2: Preflight from wildcard subdomain
     {
         const preflight =
             "OPTIONS /api/v1/test HTTP/1.1\r\n" ++
@@ -1315,12 +1326,12 @@ test "CORS preflight and actual request integration over TCP" {
             "Access-Control-Request-Method: GET\r\n" ++
             "Connection: close\r\n\r\n";
 
-        const res_str = try client.request(preflight, &resp_buf);
+        const res_str = try doRequest(preflight, &resp_buf);
         try testing.expect(std.mem.indexOf(u8, res_str, "204 No Content") != null);
         try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: https://dashboard.mickycodes.com") != null);
     }
 
-    // Test 3: Preflight OPTIONS request from unauthorized origin -> 403 Forbidden without allow-origin
+    // Test 3: Preflight from unauthorized origin -> 403 without allow-origin
     {
         const preflight =
             "OPTIONS /api/v1/test HTTP/1.1\r\n" ++
@@ -1329,12 +1340,12 @@ test "CORS preflight and actual request integration over TCP" {
             "Access-Control-Request-Method: GET\r\n" ++
             "Connection: close\r\n\r\n";
 
-        const res_str = try client.request(preflight, &resp_buf);
+        const res_str = try doRequest(preflight, &resp_buf);
         try testing.expect(std.mem.indexOf(u8, res_str, "403 Forbidden") != null);
         try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin") == null);
     }
 
-    // Test 4: Actual GET request with Origin
+    // Test 4: Actual GET request with Origin preserves CORS header
     {
         const req =
             "GET /api/v1/test HTTP/1.1\r\n" ++
@@ -1342,13 +1353,13 @@ test "CORS preflight and actual request integration over TCP" {
             "Origin: http://localhost:5173\r\n" ++
             "Connection: close\r\n\r\n";
 
-        const res_str = try client.request(req, &resp_buf);
+        const res_str = try doRequest(req, &resp_buf);
         try testing.expect(std.mem.indexOf(u8, res_str, "200 OK") != null);
         try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: http://localhost:5173") != null);
         try testing.expect(std.mem.indexOf(u8, res_str, "{\"message\":\"success\"}") != null);
     }
 
-    // Test 5: Route not found (404) preserves CORS header so browser does not throw CORS error
+    // Test 5: 404 route preserves CORS header (browser must not throw CORS error on 404)
     {
         const req =
             "GET /api/v1/non_existent_route HTTP/1.1\r\n" ++
@@ -1356,12 +1367,12 @@ test "CORS preflight and actual request integration over TCP" {
             "Origin: http://localhost:5173\r\n" ++
             "Connection: close\r\n\r\n";
 
-        const res_str = try client.request(req, &resp_buf);
+        const res_str = try doRequest(req, &resp_buf);
         try testing.expect(std.mem.indexOf(u8, res_str, "404 Not Found") != null);
         try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: http://localhost:5173") != null);
     }
 
-    // Test 6: Route crash (500) preserves CORS header
+    // Test 6: Handler crash (500) preserves CORS header
     {
         const req =
             "GET /api/v1/crash HTTP/1.1\r\n" ++
@@ -1369,9 +1380,10 @@ test "CORS preflight and actual request integration over TCP" {
             "Origin: http://localhost:5173\r\n" ++
             "Connection: close\r\n\r\n";
 
-        const res_str = try client.request(req, &resp_buf);
+        const res_str = try doRequest(req, &resp_buf);
         try testing.expect(std.mem.indexOf(u8, res_str, "500 Internal Server Error") != null);
         try testing.expect(std.mem.indexOf(u8, res_str, "access-control-allow-origin: http://localhost:5173") != null);
     }
 }
+
 
